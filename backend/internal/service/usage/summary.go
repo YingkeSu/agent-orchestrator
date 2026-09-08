@@ -24,6 +24,7 @@ type usageSummaryStore interface {
 	AggregateUsageByModel(context.Context, *time.Time, *time.Time, string, string) ([]domain.UsageModelScopeAggregate, error)
 	AggregateUsageByProvider(context.Context, *time.Time, *time.Time, string, string) ([]domain.UsageProviderScopeAggregate, error)
 	ListUsageRequestLog(context.Context, *time.Time, *time.Time, string, string, *int64, int64) ([]domain.UsageRequestLogEntry, error)
+	AggregateUsageTrend(context.Context, *time.Time, *time.Time, int64, string, string) ([]domain.UsageTrendBucket, error)
 }
 
 // SummaryReader derives token and estimated-cost summaries from normalized

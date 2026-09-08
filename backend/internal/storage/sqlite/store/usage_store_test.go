@@ -891,6 +891,73 @@ func timePtr(t time.Time) *time.Time {
 	return &t
 }
 
+func TestAggregateUsageTrendBucketsAcrossSessionsAndRange(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	codexSession := seedUsageSession(t, s, domain.HarnessCodex)
+	codexSource := seedUsageSource(t, s, codexSession, time.Date(2026, 9, 8, 13, 37, 0, 0, time.UTC))
+	claudeSession := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	claudeSource := seedUsageSource(t, s, claudeSession, time.Date(2026, 9, 8, 15, 42, 0, 0, time.UTC))
+
+	// Events land deliberately off bucket edges (13:37 and 15:42).
+	codexEvent := usageEvent("codex-1337", canonicalUsageTokens(100, 40, 60, 30))
+	codexEvent.CreatedAt = time.Date(2026, 9, 8, 13, 37, 0, 0, time.UTC)
+	mustNoError(t, s.ApplyUsageChunk(ctx, codexSource.ID, 0, codexSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: codexEvent.CreatedAt,
+	}, []domain.ModelUsageEvent{codexEvent}, nil))
+	claudeEvent := anthropicUsageEvent("claude-1542", 20, 10, 40, 15)
+	claudeEvent.CreatedAt = time.Date(2026, 9, 8, 15, 42, 0, 0, time.UTC)
+	mustNoError(t, s.ApplyUsageChunk(ctx, claudeSource.ID, 0, claudeSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: claudeEvent.CreatedAt,
+	}, []domain.ModelUsageEvent{claudeEvent}, nil))
+
+	from := time.Date(2026, 9, 8, 13, 37, 0, 0, time.UTC)
+	to := time.Date(2026, 9, 8, 15, 42, 0, 0, time.UTC)
+
+	// Hour buckets: the events land in the 13:00 and 15:00 buckets and the
+	// 14:00 bucket is absent from the result (the service zero-fills it).
+	rows, err := s.AggregateUsageTrend(ctx, &from, &to, 3600, "", "")
+	mustNoError(t, err, "hour trend")
+	if len(rows) != 2 {
+		t.Fatalf("hour trend rows = %+v, want 2", rows)
+	}
+	if !rows[0].BucketStart.Equal(time.Date(2026, 9, 8, 13, 0, 0, 0, time.UTC)) || rows[0].EventCount != 1 ||
+		usageTokenValue(rows[0].Tokens.InputTokens) != 100 ||
+		!rows[1].BucketStart.Equal(time.Date(2026, 9, 8, 15, 0, 0, 0, time.UTC)) || rows[1].EventCount != 1 ||
+		usageTokenValue(rows[1].Tokens.InputTokens) != 70 ||
+		usageTokenValue(rows[1].Tokens.UncachedInputTokens) != 30 {
+		t.Fatalf("hour trend rows = %+v", rows)
+	}
+
+	// Day buckets: both events land in the same midnight-aligned bucket.
+	rows, err = s.AggregateUsageTrend(ctx, &from, &to, 86400, "", "")
+	mustNoError(t, err, "day trend")
+	if len(rows) != 1 || !rows[0].BucketStart.Equal(time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)) || rows[0].EventCount != 2 {
+		t.Fatalf("day trend rows = %+v", rows)
+	}
+
+	// Source filter: only the codex rollout source kind.
+	rows, err = s.AggregateUsageTrend(ctx, &from, &to, 3600, "codex_rollout", "")
+	mustNoError(t, err, "source-filtered trend")
+	if len(rows) != 1 || rows[0].EventCount != 1 || usageTokenValue(rows[0].Tokens.InputTokens) != 100 {
+		t.Fatalf("source-filtered rows = %+v", rows)
+	}
+
+	// Model filter: exact model id match.
+	rows, err = s.AggregateUsageTrend(ctx, &from, &to, 3600, "", "claude-x")
+	mustNoError(t, err, "model-filtered trend")
+	if len(rows) != 1 || rows[0].EventCount != 1 || usageTokenValue(rows[0].Tokens.InputTokens) != 70 {
+		t.Fatalf("model-filtered rows = %+v", rows)
+	}
+
+	// Unknown filters yield no buckets, not an error.
+	rows, err = s.AggregateUsageTrend(ctx, &from, &to, 3600, "kimi_wire", "no-such-model")
+	mustNoError(t, err, "unknown-filter trend")
+	if len(rows) != 0 {
+		t.Fatalf("unknown-filter rows = %+v, want none", rows)
+	}
+}
+
 func TestApplyUsageChunkPersistsProviderSplitsAndPassiveCosts(t *testing.T) {
 	dataDir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dataDir)

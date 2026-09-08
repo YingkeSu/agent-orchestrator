@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -21,6 +22,7 @@ type UsageSummaryService interface {
 	Models(context.Context, *time.Time, *time.Time, string, string) ([]domain.ModelUsageStatsRow, error)
 	Providers(context.Context, *time.Time, *time.Time, string, string) ([]domain.ProviderUsageStatsRow, error)
 	ListRequestLog(context.Context, *time.Time, *time.Time, string, string, *int64, int64) (domain.UsageRequestLogPage, error)
+	Trend(context.Context, *time.Time, *time.Time, domain.UsageTrendBucketSize, string, string) (domain.GlobalUsageTrend, error)
 }
 
 // UsageController owns compact dashboard usage routes.
@@ -36,6 +38,7 @@ func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/models", c.getModelStats)
 	r.Get("/usage/providers", c.getProviderStats)
 	r.Get("/usage/log", c.getLog)
+	r.Get("/usage/trend", c.getTrend)
 }
 
 // getSummary returns the global cross-session usage summary over an optional
@@ -235,6 +238,67 @@ func (c *UsageController) getLog(w http.ResponseWriter, r *http.Request) {
 		Items:        items,
 		NextBeforeID: page.NextBeforeID,
 	})
+}
+
+// getTrend returns a time-bucketed usage series over a required created_at
+// range. from/to are RFC 3339 timestamps; bucket selects hour or day buckets
+// (default hour); source and model are optional read-time filters matching the
+// usage source kind and exact model id.
+func (c *UsageController) getTrend(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/trend")
+		return
+	}
+	query := r.URL.Query()
+	from, err := parseRequiredTime(query.Get("from"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_FROM", "from must be an RFC 3339 timestamp", nil)
+		return
+	}
+	to, err := parseRequiredTime(query.Get("to"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_TO", "to must be an RFC 3339 timestamp", nil)
+		return
+	}
+	bucket := query.Get("bucket")
+	if bucket == "" {
+		bucket = "hour"
+	}
+	if bucket != string(domain.UsageTrendBucketHour) && bucket != string(domain.UsageTrendBucketDay) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_BUCKET", "bucket must be hour or day", nil)
+		return
+	}
+	trend, err := c.Svc.Trend(r.Context(), from, to, domain.UsageTrendBucketSize(bucket), query.Get("source"), query.Get("model"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, usageTrendResponse(trend))
+}
+
+// parseRequiredTime parses an RFC 3339 timestamp, returning an error for an
+// empty or malformed value.
+func parseRequiredTime(raw string) (*time.Time, error) {
+	if raw == "" {
+		return nil, fmt.Errorf("timestamp is required")
+	}
+	return parseOptionalTime(raw)
+}
+
+func usageTrendResponse(trend domain.GlobalUsageTrend) UsageTrendResponse {
+	buckets := make([]UsageTrendBucketResponse, 0, len(trend.Buckets))
+	for _, bucket := range trend.Buckets {
+		buckets = append(buckets, UsageTrendBucketResponse{
+			BucketStart:         bucket.BucketStart,
+			RequestCount:        bucket.RequestCount,
+			InputTokens:         bucket.InputTokens,
+			CachedInputTokens:   bucket.CachedInputTokens,
+			UncachedInputTokens: bucket.UncachedInputTokens,
+			OutputTokens:        bucket.OutputTokens,
+			CostNanos:           bucket.CostNanos,
+		})
+	}
+	return UsageTrendResponse{BucketSize: string(trend.BucketSize), Buckets: buckets}
 }
 
 func (c *UsageController) listSessions(w http.ResponseWriter, r *http.Request) {

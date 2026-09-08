@@ -1520,7 +1520,43 @@ func nullableString(value string) *string {
 		return nil
 	}
 	return &value
+}
 
+// UsageTrendQuery is the query string accepted by GET /api/v1/usage/trend.
+// from/to bound the created_at range and are required (inclusive, RFC 3339).
+// bucket selects hour or day buckets (default hour); the server clamps hour
+// buckets to day buckets when the range spans more than 31 days. source and
+// model are optional read-time filters matching the usage source kind that
+// produced the event and the exact model id.
+type UsageTrendQuery struct {
+	From   string `query:"from" description:"Inclusive lower created_at bound (RFC 3339). Required." format:"date-time"`
+	To     string `query:"to" description:"Inclusive upper created_at bound (RFC 3339). Required." format:"date-time"`
+	Bucket string `query:"bucket,omitempty" enum:"hour,day" description:"Bucket width. Defaults to hour; clamped to day when the range spans more than 31 days."`
+	Source string `query:"source,omitempty" description:"Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire)."`
+	Model  string `query:"model,omitempty" description:"Optional exact model id filter."`
+}
+
+// UsageTrendBucketResponse is one time-bucketed usage aggregate. Absent
+// buckets carry explicit zeros so the chart stays continuous; a bucket whose
+// metric is not fully known keeps a nil component (nil/unknown never zero).
+// Cache creation is folded into uncached input by the V1 pipeline and has no
+// separate series here.
+type UsageTrendBucketResponse struct {
+	BucketStart         time.Time `json:"bucketStart" format:"date-time"`
+	RequestCount        int64     `json:"requestCount" minimum:"0" description:"Count of usage events in the bucket (token-event granularity)."`
+	InputTokens         *int64    `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input. Null when not fully known."`
+	CachedInputTokens   *int64    `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache. Null when not fully known."`
+	UncachedInputTokens *int64    `json:"uncachedInputTokens" minimum:"0" description:"Input not read from an existing provider cache; includes cache writes. Null when not fully known."`
+	OutputTokens        *int64    `json:"outputTokens" minimum:"0" description:"Total output. Null when not fully known."`
+	CostNanos           *int64    `json:"costNanos" minimum:"0" description:"Durable estimated cost in nano-USD. Null when the bucket has no known lower bound."`
+}
+
+// UsageTrendResponse is the cross-session time-bucketed usage series over the
+// requested range. bucketSize is the size actually used (hour buckets are
+// clamped to day for ranges longer than 31 days).
+type UsageTrendResponse struct {
+	BucketSize string                     `json:"bucketSize" enum:"hour,day"`
+	Buckets    []UsageTrendBucketResponse `json:"buckets"`
 }
 
 // SystemRequirementsResponse is the body of GET /api/v1/system/requirements.

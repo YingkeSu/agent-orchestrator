@@ -439,6 +439,48 @@ type UsageRequestLogPage struct {
 	NextBeforeID *int64
 }
 
+// UsageTrendBucketSize identifies the width of one usage trend bucket.
+type UsageTrendBucketSize string
+
+// Usage trend bucket sizes.
+const (
+	UsageTrendBucketHour UsageTrendBucketSize = "hour"
+	UsageTrendBucketDay  UsageTrendBucketSize = "day"
+)
+
+// UsageTrendBucket is one raw time-bucketed usage aggregate read from storage
+// before the service applies coverage rules and zero-fills absent buckets.
+type UsageTrendBucket struct {
+	BucketStart time.Time
+	EventCount  int64
+	Tokens      UsageTokenMetrics
+	Cost        UsageCostAggregate
+}
+
+// UsageTrendBucketTotals is one derived bucket in the trend read model. Absent
+// buckets carry explicit zeros so the chart stays continuous; a bucket whose
+// metric is not fully known keeps a nil component (nil/unknown never zero).
+type UsageTrendBucketTotals struct {
+	BucketStart         time.Time
+	RequestCount        int64
+	InputTokens         *int64
+	CachedInputTokens   *int64
+	UncachedInputTokens *int64
+	OutputTokens        *int64
+	CostNanos           *int64
+}
+
+// GlobalUsageTrend is the cross-session time-bucketed usage read model over an
+// optional created_at range. Buckets are contiguous and UTC-aligned; the first
+// and last buckets may be partial when the range does not align to bucket
+// edges. Cache creation is not separable in the V1 pipeline: Anthropic cache
+// writes fold into UncachedInputTokens, so no separate cache-creation series
+// is derived.
+type GlobalUsageTrend struct {
+	BucketSize UsageTrendBucketSize
+	Buckets    []UsageTrendBucketTotals
+}
+
 // UsageMetricTotals is the aggregate metric block used by session, harness,
 // and model summaries.
 type UsageMetricTotals struct {

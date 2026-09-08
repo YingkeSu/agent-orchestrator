@@ -22,6 +22,12 @@ type usageSummaryStoreStub struct {
 	globalTo     *time.Time
 	globalSource string
 	globalModel  string
+	trend        []domain.UsageTrendBucket
+	trendFrom    *time.Time
+	trendTo      *time.Time
+	trendSecs    int64
+	trendSrc     string
+	trendModel   string
 	calls        [6]int
 
 	modelRows      []domain.UsageModelScopeAggregate
@@ -71,6 +77,11 @@ func (s *usageSummaryStoreStub) ListUsageSummaryDimensions(_ context.Context, fr
 func (s *usageSummaryStoreStub) ListUsageRequestLog(_ context.Context, from, to *time.Time, source, model string, beforeID *int64, limit int64) ([]domain.UsageRequestLogEntry, error) {
 	s.logFrom, s.logTo, s.logSource, s.logModel, s.logBefore, s.logLimit = from, to, source, model, beforeID, limit
 	return s.logRows, nil
+}
+func (s *usageSummaryStoreStub) AggregateUsageTrend(_ context.Context, from, to *time.Time, seconds int64, source, model string) ([]domain.UsageTrendBucket, error) {
+	s.calls[5]++
+	s.trendFrom, s.trendTo, s.trendSecs, s.trendSrc, s.trendModel = from, to, seconds, source, model
+	return s.trend, nil
 }
 
 func TestSummaryReaderListCompactUsesOneBatchRead(t *testing.T) {

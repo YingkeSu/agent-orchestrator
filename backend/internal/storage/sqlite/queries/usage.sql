@@ -809,6 +809,70 @@ WHERE (sqlc.narg(from) IS NULL OR event.created_at >= sqlc.narg(from))
 ORDER BY event.id DESC
 LIMIT sqlc.arg(limit);
 
+-- name: AggregateUsageTrend :many
+-- Cross-session usage bucketed by UTC-aligned created_at intervals (hour or
+-- day). Every counter mirrors the global summary aggregate: a summed metric is
+-- only meaningful when every event in the bucket carried it, so the
+-- known_*_count columns let the service drop any component that is not fully
+-- known. The optional source filter matches the usage source kind that
+-- produced the event; the optional model filter matches the model id exactly.
+-- Events without a created_at cannot be placed in a bucket and are excluded.
+-- Bucket keys are unix epoch divided by the bucket width in seconds (3600 for
+-- hour, 86400 for day): the driver stores TIMESTAMP as a UTC text the SQLite
+-- date functions cannot parse, so the key is derived from its fixed prefix
+-- instead of strftime.
+SELECT
+    bucket_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(rows.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(rows.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(rows.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(rows.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(rows.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(rows.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(rows.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(rows.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(rows.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(rows.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN rows.billing_provider_source = 'observed' AND (
+        rows.estimated_cost_nanos IS NOT NULL OR rows.input_cost_nanos IS NOT NULL OR
+        rows.cached_input_cost_nanos IS NOT NULL OR rows.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN rows.billing_provider_source = 'inferred' AND (
+        rows.estimated_cost_nanos IS NOT NULL OR rows.input_cost_nanos IS NOT NULL OR
+        rows.cached_input_cost_nanos IS NOT NULL OR rows.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(rows.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(rows.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(rows.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(rows.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(rows.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(rows.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM (
+    SELECT
+        unixepoch(substr(mue.created_at, 1, 19)) / CAST(sqlc.arg(bucket_seconds) AS INTEGER) AS bucket_key,
+        mue.input_tokens,
+        mue.cached_input_tokens,
+        mue.uncached_input_tokens,
+        mue.output_tokens,
+        mue.estimated_cost_nanos,
+        mue.billing_provider_source,
+        mue.input_cost_nanos,
+        mue.cached_input_cost_nanos,
+        mue.output_cost_nanos
+    FROM model_usage_events mue
+    JOIN usage_sources us ON us.id = mue.usage_source_id
+    WHERE mue.created_at IS NOT NULL
+      AND (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
+      AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+      AND (sqlc.narg(source) IS NULL OR us.kind = sqlc.narg(source))
+      AND (sqlc.narg(model) IS NULL OR mue.model_id = sqlc.narg(model))
+) rows
+GROUP BY 1
+ORDER BY 1;
 
 -- name: GetUsageSessionIncomplete :one
 SELECT CAST(COALESCE((

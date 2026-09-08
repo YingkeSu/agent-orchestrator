@@ -6942,6 +6942,77 @@ paths:
       summary: Get global cross-session usage summary over an optional time range
       tags:
       - usage
+  /api/v1/usage/trend:
+    get:
+      operationId: getUsageTrend
+      parameters:
+      - description: Inclusive lower created_at bound (RFC 3339). Required.
+        in: query
+        name: from
+        schema:
+          description: Inclusive lower created_at bound (RFC 3339). Required.
+          format: date-time
+          type: string
+      - description: Inclusive upper created_at bound (RFC 3339). Required.
+        in: query
+        name: to
+        schema:
+          description: Inclusive upper created_at bound (RFC 3339). Required.
+          format: date-time
+          type: string
+      - description: Bucket width. Defaults to hour; clamped to day when the range
+          spans more than 31 days.
+        in: query
+        name: bucket
+        schema:
+          description: Bucket width. Defaults to hour; clamped to day when the range
+            spans more than 31 days.
+          enum:
+          - hour
+          - day
+          type: string
+      - description: Optional usage source kind filter (claude_main, claude_subagent,
+          codex_rollout, kimi_wire).
+        in: query
+        name: source
+        schema:
+          description: Optional usage source kind filter (claude_main, claude_subagent,
+            codex_rollout, kimi_wire).
+          type: string
+      - description: Optional exact model id filter.
+        in: query
+        name: model
+        schema:
+          description: Optional exact model id filter.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageTrendResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a time-bucketed usage trend over a required created_at range
+      tags:
+      - usage
 components:
   schemas:
     APIError:
@@ -12257,6 +12328,74 @@ components:
       - processedTokens
       - cacheReadTokens
       - estimatedCost
+      type: object
+    UsageTrendBucketResponse:
+      properties:
+        bucketStart:
+          format: date-time
+          type: string
+        cachedInputTokens:
+          description: Input read from an existing provider cache. Null when not fully
+            known.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        costNanos:
+          description: Durable estimated cost in nano-USD. Null when the bucket has
+            no known lower bound.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        inputTokens:
+          description: Total input, including cached and uncached input. Null when
+            not fully known.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        outputTokens:
+          description: Total output. Null when not fully known.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        requestCount:
+          description: Count of usage events in the bucket (token-event granularity).
+          format: int64
+          minimum: 0
+          type: integer
+        uncachedInputTokens:
+          description: Input not read from an existing provider cache; includes cache
+            writes. Null when not fully known.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+      required:
+      - bucketStart
+      - requestCount
+      - inputTokens
+      - cachedInputTokens
+      - uncachedInputTokens
+      - outputTokens
+      - costNanos
+      type: object
+    UsageTrendResponse:
+      properties:
+        bucketSize:
+          enum:
+          - hour
+          - day
+          type: string
+        buckets:
+          items:
+            $ref: '#/components/schemas/UsageTrendBucketResponse'
+          type: array
+      required:
+      - bucketSize
+      - buckets
       type: object
     WorkspaceCommitSummary:
       properties:

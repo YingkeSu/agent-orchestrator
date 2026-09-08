@@ -374,6 +374,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersListUsageModelStatsResponse":      "ListUsageModelStatsResponse",
 	"ControllersUsageProviderStatsRow":            "UsageProviderStatsRow",
 	"ControllersListUsageProviderStatsResponse":   "ListUsageProviderStatsResponse",
+	"ControllersUsageTrendQuery":                  "UsageTrendQuery",
+	"ControllersUsageTrendBucketResponse":         "UsageTrendBucketResponse",
+	"ControllersUsageTrendResponse":               "UsageTrendResponse",
 	// httpd/controllers — standalone shell terminal wire envelopes
 	"ControllersShellTerminalHandleIDParam":            "ShellTerminalHandleIDParam",
 	"ControllersOpenShellTerminalRequest":              "OpenShellTerminalRequest",
@@ -753,7 +756,17 @@ func usageOperations() []operation {
 			pathParams: []any{controllers.UsageRequestLogQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.UsageRequestLogResponse{}},
-
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/trend", id: "getUsageTrend", tag: "usage",
+			summary:    "Get a time-bucketed usage trend over a required created_at range",
+			pathParams: []any{controllers.UsageTrendQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageTrendResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
