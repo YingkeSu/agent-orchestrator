@@ -4248,11 +4248,15 @@ export interface components {
         UsageSummaryResponse: {
             /** @description Cached input / (cached + uncached input). Null when either component is unknown. */
             cacheHitRate: null | number;
+            /** @description Distinct model ids present in the filtered range. */
+            models: string[];
             /**
              * Format: int64
              * @description Count of usage events in the range (token-event granularity).
              */
             requestCount: number;
+            /** @description Distinct usage source kinds present in the filtered range. */
+            sources: string[];
             totals: components["schemas"]["UsageTotalsResponse"];
         };
         UsageTotalsResponse: {
@@ -12832,6 +12836,10 @@ export interface operations {
                 from?: string;
                 /** @description Inclusive upper created_at bound (RFC 3339). */
                 to?: string;
+                /** @description Optional usage source kind filter (for example claude_main or codex_rollout). */
+                source?: string;
+                /** @description Optional exact model id filter. */
+                model?: string;
             };
             header?: never;
             path?: never;

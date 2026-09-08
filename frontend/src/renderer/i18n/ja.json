@@ -1828,5 +1828,11 @@
 	"usage.totalInput": "合計入力",
 	"usage.cacheHitRate": "キャッシュヒット率",
 	"usage.cacheHitRateHint": "キャッシュ済み /（キャッシュ済み + 新規）",
-	"usage.emptyRange": "この期間の利用はありません。"
+	"usage.emptyRange": "この期間の利用はありません。",
+	"usage.allModels": "すべてのモデル",
+	"usage.allSources": "すべてのソース",
+	"usage.sourceKind.claudeMain": "Claude",
+	"usage.sourceKind.claudeSubagent": "Claude サブエージェント",
+	"usage.sourceKind.codexRollout": "Codex",
+	"usage.sourceKind.kimiWire": "Kimi"
 }

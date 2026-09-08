@@ -16,7 +16,8 @@ type usageSummaryStore interface {
 	ListCompactSessionUsageAggregates(context.Context, domain.ProjectID) ([]domain.CompactSessionUsageAggregate, error)
 	ListUsageModelAggregates(context.Context, domain.SessionID) ([]domain.UsageModelAggregate, error)
 	GetUsageSessionIncomplete(context.Context, domain.SessionID) (bool, error)
-	AggregateUsageSummary(context.Context, *time.Time, *time.Time) (domain.GlobalUsageAggregate, error)
+	AggregateUsageSummary(context.Context, *time.Time, *time.Time, string, string) (domain.GlobalUsageAggregate, error)
+	ListUsageSummaryDimensions(context.Context, *time.Time, *time.Time, string, string) (domain.UsageSummaryDimensions, error)
 }
 
 // SummaryReader derives token and estimated-cost summaries from normalized
@@ -90,15 +91,22 @@ func (r *SummaryReader) Get(ctx context.Context, sessionID domain.SessionID) (do
 }
 
 // Global returns the cross-session usage summary over an optional created_at
-// range. Nil bounds mean unbounded. RequestCount is the count of usage events
-// (token-event granularity); true request-level semantics arrive with the
-// timing pipeline. CacheHitRate is cached input divided by cached plus
-// uncached input, or nil when either component is unknown.
-func (r *SummaryReader) Global(ctx context.Context, from, to *time.Time) (domain.GlobalUsageSummary, error) {
+// range. Nil bounds mean unbounded. The optional source kind and model filters
+// narrow the scope to exact matches; empty strings mean unfiltered. RequestCount
+// is the count of usage events (token-event granularity); true request-level
+// semantics arrive with the timing pipeline. CacheHitRate is cached input
+// divided by cached plus uncached input, or nil when either component is
+// unknown. Sources and Models are the distinct values present in the same
+// filtered scope, for dropdown options.
+func (r *SummaryReader) Global(ctx context.Context, from, to *time.Time, source, model string) (domain.GlobalUsageSummary, error) {
 	if r == nil || r.store == nil {
 		return domain.GlobalUsageSummary{}, fmt.Errorf("usage summary store is unavailable")
 	}
-	agg, err := r.store.AggregateUsageSummary(ctx, from, to)
+	agg, err := r.store.AggregateUsageSummary(ctx, from, to, source, model)
+	if err != nil {
+		return domain.GlobalUsageSummary{}, err
+	}
+	dims, err := r.store.ListUsageSummaryDimensions(ctx, from, to, source, model)
 	if err != nil {
 		return domain.GlobalUsageSummary{}, err
 	}
@@ -112,6 +120,8 @@ func (r *SummaryReader) Global(ctx context.Context, from, to *time.Time) (domain
 		Totals:       totals,
 		RequestCount: agg.EventCount,
 		CacheHitRate: cacheHitRate(agg.Tokens),
+		Sources:      dims.Sources,
+		Models:       dims.Models,
 	}, nil
 }
 

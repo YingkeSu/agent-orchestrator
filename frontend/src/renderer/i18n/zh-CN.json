@@ -1810,5 +1810,11 @@
 	"usage.totalInput": "总输入",
 	"usage.cacheHitRate": "缓存命中率",
 	"usage.cacheHitRateHint": "缓存 /（缓存 + 新输入）",
-	"usage.emptyRange": "此范围内没有用量。"
+	"usage.emptyRange": "此范围内没有用量。",
+	"usage.allModels": "所有模型",
+	"usage.allSources": "所有来源",
+	"usage.sourceKind.claudeMain": "Claude",
+	"usage.sourceKind.claudeSubagent": "Claude 子代理",
+	"usage.sourceKind.codexRollout": "Codex",
+	"usage.sourceKind.kimiWire": "Kimi"
 }

@@ -1828,5 +1828,11 @@
 	"usage.totalInput": "총 입력",
 	"usage.cacheHitRate": "캐시 적중률",
 	"usage.cacheHitRateHint": "캐시 / (캐시 + 새 입력)",
-	"usage.emptyRange": "이 범위에 사용량이 없습니다."
+	"usage.emptyRange": "이 범위에 사용량이 없습니다.",
+	"usage.allModels": "모든 모델",
+	"usage.allSources": "모든 소스",
+	"usage.sourceKind.claudeMain": "Claude",
+	"usage.sourceKind.claudeSubagent": "Claude 하위 에이전트",
+	"usage.sourceKind.codexRollout": "Codex",
+	"usage.sourceKind.kimiWire": "Kimi"
 }

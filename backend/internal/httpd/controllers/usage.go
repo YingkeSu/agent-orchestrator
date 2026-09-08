@@ -16,7 +16,7 @@ import (
 type UsageSummaryService interface {
 	ListCompact(context.Context, domain.ProjectID) ([]domain.CompactSessionUsage, error)
 	Get(context.Context, domain.SessionID) (domain.SessionUsageSummary, error)
-	Global(context.Context, *time.Time, *time.Time) (domain.GlobalUsageSummary, error)
+	Global(context.Context, *time.Time, *time.Time, string, string) (domain.GlobalUsageSummary, error)
 }
 
 // UsageController owns compact dashboard usage routes.
@@ -32,8 +32,9 @@ func (c *UsageController) Register(r chi.Router) {
 }
 
 // getSummary returns the global cross-session usage summary over an optional
-// created_at range. from/to are RFC 3339 timestamps; omitting either leaves
-// that side unbounded.
+// created_at range, optionally narrowed by an exact source kind or model id.
+// from/to are RFC 3339 timestamps; omitting either leaves that side unbounded.
+// Empty source/model strings leave that filter off.
 func (c *UsageController) getSummary(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/summary")
@@ -50,7 +51,7 @@ func (c *UsageController) getSummary(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_TO", "to must be an RFC 3339 timestamp", nil)
 		return
 	}
-	summary, err := c.Svc.Global(r.Context(), from, to)
+	summary, err := c.Svc.Global(r.Context(), from, to, query.Get("source"), query.Get("model"))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -59,7 +60,17 @@ func (c *UsageController) getSummary(w http.ResponseWriter, r *http.Request) {
 		Totals:       usageTotalsResponse(summary.Totals),
 		RequestCount: summary.RequestCount,
 		CacheHitRate: summary.CacheHitRate,
+		Sources:      usageSourceKindStrings(summary.Sources),
+		Models:       summary.Models,
 	})
+}
+
+func usageSourceKindStrings(kinds []domain.UsageSourceKind) []string {
+	out := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		out = append(out, string(kind))
+	}
+	return out
 }
 
 // parseOptionalTime parses an RFC 3339 timestamp, returning nil for an empty

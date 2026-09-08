@@ -10,16 +10,19 @@ import (
 )
 
 type usageSummaryStoreStub struct {
-	projectID  domain.ProjectID
-	rows       []domain.CompactSessionUsageAggregate
-	session    domain.SessionRecord
-	found      bool
-	incomplete bool
-	models     []domain.UsageModelAggregate
-	global     domain.GlobalUsageAggregate
-	globalFrom *time.Time
-	globalTo   *time.Time
-	calls      [5]int
+	projectID    domain.ProjectID
+	rows         []domain.CompactSessionUsageAggregate
+	session      domain.SessionRecord
+	found        bool
+	incomplete   bool
+	models       []domain.UsageModelAggregate
+	global       domain.GlobalUsageAggregate
+	dims         domain.UsageSummaryDimensions
+	globalFrom   *time.Time
+	globalTo     *time.Time
+	globalSource string
+	globalModel  string
+	calls        [6]int
 }
 
 func (s *usageSummaryStoreStub) ListCompactSessionUsageAggregates(_ context.Context, id domain.ProjectID) ([]domain.CompactSessionUsageAggregate, error) {
@@ -38,10 +41,14 @@ func (s *usageSummaryStoreStub) GetUsageSessionIncomplete(context.Context, domai
 	s.calls[3]++
 	return s.incomplete, nil
 }
-func (s *usageSummaryStoreStub) AggregateUsageSummary(_ context.Context, from, to *time.Time) (domain.GlobalUsageAggregate, error) {
+func (s *usageSummaryStoreStub) AggregateUsageSummary(_ context.Context, from, to *time.Time, source, model string) (domain.GlobalUsageAggregate, error) {
 	s.calls[4]++
-	s.globalFrom, s.globalTo = from, to
+	s.globalFrom, s.globalTo, s.globalSource, s.globalModel = from, to, source, model
 	return s.global, nil
+}
+func (s *usageSummaryStoreStub) ListUsageSummaryDimensions(_ context.Context, from, to *time.Time, source, model string) (domain.UsageSummaryDimensions, error) {
+	s.calls[5]++
+	return s.dims, nil
 }
 
 func TestSummaryReaderListCompactUsesOneBatchRead(t *testing.T) {
@@ -164,7 +171,7 @@ func TestSummaryReaderGetPreservesStrongestPartialLowerBoundWithoutDoubleCountin
 		got.Harnesses[1].Totals.ProcessedTokens == nil || *got.Harnesses[1].Totals.ProcessedTokens != 125 {
 		t.Fatalf("processed totals by scope = %+v", got.Harnesses)
 	}
-	if store.calls != [5]int{0, 1, 1, 1, 0} {
+	if store.calls != [6]int{0, 1, 1, 1, 0, 0} {
 		t.Fatalf("store calls = %v", store.calls)
 	}
 }
@@ -260,7 +267,7 @@ func TestSummaryReaderGlobalHappyPath(t *testing.T) {
 		Cost:       completeCostAggregate(2, 300, 100, 40, 160),
 	}}
 
-	got, err := NewSummaryReader(store).Global(context.Background(), &from, &to)
+	got, err := NewSummaryReader(store).Global(context.Background(), &from, &to, "", "")
 	mustNoError(t, err)
 	if store.globalFrom == nil || !store.globalFrom.Equal(from) || store.globalTo == nil || !store.globalTo.Equal(to) {
 		t.Fatalf("range bounds = %v .. %v, want %v .. %v", store.globalFrom, store.globalTo, from, to)
@@ -297,7 +304,7 @@ func TestSummaryReaderGlobalExcludesUnknownMetrics(t *testing.T) {
 		Cost: completeCostAggregate(1, 0, 0, 0, 0),
 	}}
 
-	got, err := NewSummaryReader(store).Global(context.Background(), nil, nil)
+	got, err := NewSummaryReader(store).Global(context.Background(), nil, nil, "", "")
 	mustNoError(t, err)
 	if got.Totals.CachedInputTokens != nil {
 		t.Fatalf("unknown cached input = %v, want nil", got.Totals.CachedInputTokens)
@@ -314,7 +321,7 @@ func TestSummaryReaderGlobalExcludesUnknownMetrics(t *testing.T) {
 
 func TestSummaryReaderGlobalEmptyRange(t *testing.T) {
 	store := &usageSummaryStoreStub{global: domain.GlobalUsageAggregate{EventCount: 0}}
-	got, err := NewSummaryReader(store).Global(context.Background(), nil, nil)
+	got, err := NewSummaryReader(store).Global(context.Background(), nil, nil, "", "")
 	mustNoError(t, err)
 	if got.RequestCount != 0 {
 		t.Fatalf("request count = %d, want 0", got.RequestCount)
@@ -325,6 +332,53 @@ func TestSummaryReaderGlobalEmptyRange(t *testing.T) {
 	}
 	if got.CacheHitRate != nil {
 		t.Fatalf("empty range cache hit rate = %v, want nil", got.CacheHitRate)
+	}
+}
+
+func TestSummaryReaderGlobalPassesFiltersAndDimensionsThrough(t *testing.T) {
+	from, to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	store := &usageSummaryStoreStub{
+		global: domain.GlobalUsageAggregate{
+			EventCount: 1,
+			Tokens:     testUsageMetrics(100, 40, 60, 20),
+			Cost:       completeCostAggregate(1, 30, 10, 5, 15),
+		},
+		dims: domain.UsageSummaryDimensions{
+			Sources: []domain.UsageSourceKind{domain.UsageSourceCodexRollout},
+			Models:  []string{"gpt-5.6"},
+		},
+	}
+
+	got, err := NewSummaryReader(store).Global(context.Background(), &from, &to, "codex_rollout", "gpt-5.6")
+	mustNoError(t, err)
+	if store.calls[4] != 1 || store.calls[5] != 1 ||
+		store.globalFrom == nil || !store.globalFrom.Equal(from) ||
+		store.globalTo == nil || !store.globalTo.Equal(to) ||
+		store.globalSource != "codex_rollout" || store.globalModel != "gpt-5.6" {
+		t.Fatalf("filtered aggregate read = from:%v to:%v source:%q model:%q calls:%v",
+			store.globalFrom, store.globalTo, store.globalSource, store.globalModel, store.calls)
+	}
+	if got.RequestCount != 1 || got.Totals.InputTokens == nil || *got.Totals.InputTokens != 100 {
+		t.Fatalf("filtered summary = %+v", got)
+	}
+	if len(got.Sources) != 1 || got.Sources[0] != domain.UsageSourceCodexRollout ||
+		len(got.Models) != 1 || got.Models[0] != "gpt-5.6" {
+		t.Fatalf("dimensions = sources:%v models:%v, want codex_rollout and gpt-5.6", got.Sources, got.Models)
+	}
+}
+
+func TestSummaryReaderGlobalUnknownFilterYieldsEmptyNotError(t *testing.T) {
+	store := &usageSummaryStoreStub{global: domain.GlobalUsageAggregate{EventCount: 0}}
+	got, err := NewSummaryReader(store).Global(context.Background(), nil, nil, "no_such_source", "no-such-model")
+	mustNoError(t, err)
+	if got.RequestCount != 0 {
+		t.Fatalf("request count = %d, want 0 for an unknown filter", got.RequestCount)
+	}
+	if got.Totals.InputTokens != nil || got.Totals.OutputTokens != nil || got.Totals.EstimatedCost != nil {
+		t.Fatalf("unknown filter totals = %+v, want all nil", got.Totals)
+	}
+	if len(got.Sources) != 0 || len(got.Models) != 0 {
+		t.Fatalf("unknown filter dimensions = %+v, want empty", got)
 	}
 }
 

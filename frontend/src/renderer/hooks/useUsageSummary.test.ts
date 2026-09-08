@@ -41,9 +41,38 @@ describe("global usage summary", () => {
 		});
 	});
 
-	it("keeps range variants under one shared query root", () => {
-		expect(usageSummaryQueryKey()).toEqual([...usageSummaryQueryRoot, "unbounded", "unbounded"]);
-		expect(usageSummaryQueryKey("a", "b")).toEqual([...usageSummaryQueryRoot, "a", "b"]);
-		expect(usageSummaryQueryOptions("a", "b").queryKey).toEqual([...usageSummaryQueryRoot, "a", "b"]);
+	it("passes source and model filters as query params", async () => {
+		await fetchUsageSummary(undefined, undefined, "codex_rollout", "gpt-5.6");
+
+		expect(getMock).toHaveBeenCalledWith("/api/v1/usage/summary", {
+			params: { query: { source: "codex_rollout", model: "gpt-5.6" } },
+		});
+	});
+
+	it("omits a filter that was not supplied", async () => {
+		await fetchUsageSummary("2026-09-01T00:00:00Z", undefined, "claude_main");
+
+		expect(getMock).toHaveBeenCalledWith("/api/v1/usage/summary", {
+			params: { query: { from: "2026-09-01T00:00:00Z", source: "claude_main" } },
+		});
+	});
+
+	it("keeps range and filter variants under one shared query root", () => {
+		expect(usageSummaryQueryKey()).toEqual([...usageSummaryQueryRoot, "unbounded", "unbounded", "any", "any"]);
+		expect(usageSummaryQueryKey("a", "b")).toEqual([...usageSummaryQueryRoot, "a", "b", "any", "any"]);
+		expect(usageSummaryQueryKey("a", "b", "codex_rollout", "gpt-5.6")).toEqual([
+			...usageSummaryQueryRoot,
+			"a",
+			"b",
+			"codex_rollout",
+			"gpt-5.6",
+		]);
+		expect(usageSummaryQueryOptions("a", "b", "codex_rollout", "gpt-5.6").queryKey).toEqual([
+			...usageSummaryQueryRoot,
+			"a",
+			"b",
+			"codex_rollout",
+			"gpt-5.6",
+		]);
 	});
 });
