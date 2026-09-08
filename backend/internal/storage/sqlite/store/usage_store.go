@@ -851,6 +851,68 @@ func (s *Store) ListCompactSessionUsageAggregates(ctx context.Context, projectID
 	return out, nil
 }
 
+// ListUsageRequestLog returns one newest-first page of normalized usage events
+// over an optional created_at range, optional exact source kind / model id
+// filters, and a keyset cursor. limit is the requested page size; the store
+// requests limit+1 rows so the caller can tell whether another page exists. A
+// nil beforeID means the first (newest) page. Ordering is by event id
+// descending so paging is stable even when created_at is NULL or backfilled out
+// of timestamp order.
+func (s *Store) ListUsageRequestLog(
+	ctx context.Context,
+	from, to *time.Time,
+	source, model string,
+	beforeID *int64,
+	limit int64,
+) ([]domain.UsageRequestLogEntry, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	rows, err := s.qr.ListUsageRequestLog(ctx, gen.ListUsageRequestLogParams{
+		From:     ptrTimeToNullTime(from),
+		To:       ptrTimeToNullTime(to),
+		Source:   stringOrNull(source),
+		Model:    stringOrNull(model),
+		BeforeID: sql.NullInt64{Int64: int64OrZero(beforeID), Valid: beforeID != nil},
+		Limit:    limit + 1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list usage request log: %w", err)
+	}
+	out := make([]domain.UsageRequestLogEntry, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.UsageRequestLogEntry{
+			ID:                 row.ID,
+			CreatedAt:          nullableTime(row.CreatedAt),
+			BillingProviderID:  row.BillingProviderID.String,
+			ModelID:            row.ModelID,
+			InputTokens:        nullInt64Ptr(row.InputTokens),
+			CachedInputTokens:  nullInt64Ptr(row.CachedInputTokens),
+			OutputTokens:       nullInt64Ptr(row.OutputTokens),
+			EstimatedCostNanos: nullInt64Ptr(row.EstimatedCostNanos),
+			SourceKind:         row.SourceKind,
+			SessionID:          row.SessionID,
+			SessionExists:      row.SessionExists != 0,
+		})
+	}
+	return out, nil
+}
+
+func int64OrZero(v *int64) int64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func nullableTime(t sql.NullTime) *time.Time {
+	if !t.Valid {
+		return nil
+	}
+	value := t.Time
+	return &value
+}
+
 // AggregateUsageSummary returns the global cross-session usage aggregate over an
 // optional created_at range. A nil bound omits that side of the range. The
 // optional source kind and model id filters are exact matches; an empty string

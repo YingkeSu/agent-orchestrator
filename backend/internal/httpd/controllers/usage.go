@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,6 +20,7 @@ type UsageSummaryService interface {
 	Global(context.Context, *time.Time, *time.Time, string, string) (domain.GlobalUsageSummary, error)
 	Models(context.Context, *time.Time, *time.Time, string, string) ([]domain.ModelUsageStatsRow, error)
 	Providers(context.Context, *time.Time, *time.Time, string, string) ([]domain.ProviderUsageStatsRow, error)
+	ListRequestLog(context.Context, *time.Time, *time.Time, string, string, *int64, int64) (domain.UsageRequestLogPage, error)
 }
 
 // UsageController owns compact dashboard usage routes.
@@ -33,6 +35,7 @@ func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/summary", c.getSummary)
 	r.Get("/usage/models", c.getModelStats)
 	r.Get("/usage/providers", c.getProviderStats)
+	r.Get("/usage/log", c.getLog)
 }
 
 // getSummary returns the global cross-session usage summary over an optional
@@ -164,6 +167,74 @@ func (c *UsageController) getProviderStats(w http.ResponseWriter, r *http.Reques
 		})
 	}
 	envelope.WriteJSON(w, http.StatusOK, ListUsageProviderStatsResponse{Providers: providers})
+}
+
+// getLog returns a bounded, newest-first page of usage events for the request
+// log. It accepts the same from/to range filters as the summary, optionally
+// narrowed by an exact source kind or model id, plus an optional limit and a
+// before cursor for keyset paging. Ordering is by event id (descending), which
+// is monotonic with insertion, NULL-safe, and stable across pages.
+func (c *UsageController) getLog(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/log")
+		return
+	}
+	query := r.URL.Query()
+	from, err := parseOptionalTime(query.Get("from"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_FROM", "from must be an RFC 3339 timestamp", nil)
+		return
+	}
+	to, err := parseOptionalTime(query.Get("to"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_TO", "to must be an RFC 3339 timestamp", nil)
+		return
+	}
+	source := query.Get("source")
+	model := query.Get("model")
+	var beforeID *int64
+	if raw := query.Get("before"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_BEFORE", "before must be an event id", nil)
+			return
+		}
+		beforeID = &parsed
+	}
+	var limit int64 = 50
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_LIMIT", "limit must be an integer", nil)
+			return
+		}
+		limit = parsed
+	}
+	page, err := c.Svc.ListRequestLog(r.Context(), from, to, source, model, beforeID, limit)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	items := make([]UsageRequestLogEntryResponse, 0, len(page.Items))
+	for _, entry := range page.Items {
+		items = append(items, UsageRequestLogEntryResponse{
+			ID:                 entry.ID,
+			CreatedAt:          entry.CreatedAt,
+			BillingProviderID:  nullableString(entry.BillingProviderID),
+			ModelID:            entry.ModelID,
+			InputTokens:        entry.InputTokens,
+			CachedInputTokens:  entry.CachedInputTokens,
+			OutputTokens:       entry.OutputTokens,
+			EstimatedCostNanos: entry.EstimatedCostNanos,
+			SourceKind:         string(entry.SourceKind),
+			SessionID:          string(entry.SessionID),
+			SessionExists:      entry.SessionExists,
+		})
+	}
+	envelope.WriteJSON(w, http.StatusOK, UsageRequestLogResponse{
+		Items:        items,
+		NextBeforeID: page.NextBeforeID,
+	})
 }
 
 func (c *UsageController) listSessions(w http.ResponseWriter, r *http.Request) {

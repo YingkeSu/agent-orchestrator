@@ -38,6 +38,13 @@ type fakeUsageSummaryService struct {
 	providerTo     *time.Time
 	providerSource string
 	providerModel  string
+	logPage        domain.UsageRequestLogPage
+	logFrom        *time.Time
+	logTo          *time.Time
+	logSource      string
+	logModel       string
+	logBefore      *int64
+	logLimit       int64
 }
 
 func (f *fakeUsageSummaryService) ListCompact(_ context.Context, projectID domain.ProjectID) ([]domain.CompactSessionUsage, error) {
@@ -53,6 +60,11 @@ func (f *fakeUsageSummaryService) Get(_ context.Context, sessionID domain.Sessio
 func (f *fakeUsageSummaryService) Global(_ context.Context, from, to *time.Time, source, model string) (domain.GlobalUsageSummary, error) {
 	f.from, f.to, f.source, f.model = from, to, source, model
 	return f.global, f.err
+}
+
+func (f *fakeUsageSummaryService) ListRequestLog(_ context.Context, from, to *time.Time, source, model string, beforeID *int64, limit int64) (domain.UsageRequestLogPage, error) {
+	f.logFrom, f.logTo, f.logSource, f.logModel, f.logBefore, f.logLimit = from, to, source, model, beforeID, limit
+	return f.logPage, f.err
 }
 
 func newUsageTestServer(t *testing.T, svc *fakeUsageSummaryService) *httptest.Server {
@@ -354,5 +366,130 @@ func TestUsageSummaryAPIRejectsMalformedRange(t *testing.T) {
 		if status != http.StatusBadRequest {
 			t.Fatalf("status for %q = %d, want 400", path, status)
 		}
+	}
+}
+
+func TestUsageAPIReturnsRequestLogPage(t *testing.T) {
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	input, cachedInput, output, cost := int64(1100), int64(400), int64(200), int64(135)
+	before := int64(10)
+	svc := &fakeUsageSummaryService{logPage: domain.UsageRequestLogPage{
+		Items: []domain.UsageRequestLogEntry{
+			{
+				ID: 5, CreatedAt: &now, BillingProviderID: "anthropic", ModelID: "claude-sonnet",
+				InputTokens: &input, CachedInputTokens: &cachedInput, OutputTokens: &output,
+				EstimatedCostNanos: &cost, SourceKind: domain.UsageSourceClaudeMain,
+				SessionID: "reverb-12", SessionExists: true,
+			},
+		},
+		NextBeforeID: &before,
+	}}
+	srv := newUsageTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/log?from=2026-09-01T00:00:00Z&to=2026-09-08T00:00:00Z&source=codex_rollout&model=gpt-5&limit=20&before=99", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	if svc.logFrom == nil || svc.logFrom.Format(time.RFC3339) != "2026-09-01T00:00:00Z" ||
+		svc.logTo == nil || svc.logTo.Format(time.RFC3339) != "2026-09-08T00:00:00Z" ||
+		svc.logSource != "codex_rollout" || svc.logModel != "gpt-5" ||
+		svc.logBefore == nil || *svc.logBefore != 99 || svc.logLimit != 20 {
+		t.Fatalf("log params = from %v to %v source %q model %q before %v limit %d", svc.logFrom, svc.logTo, svc.logSource, svc.logModel, svc.logBefore, svc.logLimit)
+	}
+	var got struct {
+		Items []struct {
+			ID                 int64   `json:"id"`
+			CreatedAt          string  `json:"createdAt"`
+			BillingProviderID  *string `json:"billingProviderId"`
+			ModelID            string  `json:"modelId"`
+			InputTokens        *int64  `json:"inputTokens"`
+			CachedInputTokens  *int64  `json:"cachedInputTokens"`
+			OutputTokens       *int64  `json:"outputTokens"`
+			EstimatedCostNanos *int64  `json:"estimatedCostNanos"`
+			SourceKind         string  `json:"sourceKind"`
+			SessionID          string  `json:"sessionId"`
+			SessionExists      bool    `json:"sessionExists"`
+		} `json:"items"`
+		NextBeforeID *int64 `json:"nextBeforeId"`
+	}
+	mustJSON(t, body, &got)
+	if len(got.Items) != 1 {
+		t.Fatalf("items = %+v", got.Items)
+	}
+	item := got.Items[0]
+	if item.ID != 5 || item.BillingProviderID == nil || *item.BillingProviderID != "anthropic" ||
+		item.ModelID != "claude-sonnet" || item.InputTokens == nil || *item.InputTokens != 1100 ||
+		item.CachedInputTokens == nil || *item.CachedInputTokens != 400 ||
+		item.OutputTokens == nil || *item.OutputTokens != 200 ||
+		item.EstimatedCostNanos == nil || *item.EstimatedCostNanos != 135 ||
+		item.SourceKind != "claude_main" || item.SessionID != "reverb-12" || !item.SessionExists {
+		t.Fatalf("item = %+v", item)
+	}
+	if got.NextBeforeID == nil || *got.NextBeforeID != 10 {
+		t.Fatalf("nextBeforeId = %v, want 10", got.NextBeforeID)
+	}
+}
+
+func TestUsageAPIReturnsNullBillingProviderWhenUnattributed(t *testing.T) {
+	svc := &fakeUsageSummaryService{logPage: domain.UsageRequestLogPage{
+		Items: []domain.UsageRequestLogEntry{
+			{
+				ID: 1, ModelID: "gpt-5.6",
+				SourceKind: domain.UsageSourceCodexRollout, SessionID: "mer-1",
+			},
+		},
+	}}
+	srv := newUsageTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/log", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	var got struct {
+		Items []struct {
+			CreatedAt         json.RawMessage `json:"createdAt"`
+			BillingProviderID json.RawMessage `json:"billingProviderId"`
+			InputTokens       json.RawMessage `json:"inputTokens"`
+			SessionExists     bool            `json:"sessionExists"`
+		} `json:"items"`
+	}
+	mustJSON(t, body, &got)
+	if len(got.Items) != 1 || string(got.Items[0].CreatedAt) != "null" ||
+		string(got.Items[0].BillingProviderID) != "null" ||
+		string(got.Items[0].InputTokens) != "null" || got.Items[0].SessionExists {
+		t.Fatalf("unattributed item = %+v", got.Items)
+	}
+}
+
+func TestUsageLogAPIRejectsMalformedParams(t *testing.T) {
+	svc := &fakeUsageSummaryService{}
+	srv := newUsageTestServer(t, svc)
+
+	for _, path := range []string{
+		"/api/v1/usage/log?from=not-a-time",
+		"/api/v1/usage/log?to=2026-13-99T00:00:00Z",
+		"/api/v1/usage/log?before=not-a-number",
+		"/api/v1/usage/log?limit=abc",
+	} {
+		_, status, _ := doRequest(t, srv, http.MethodGet, path, "")
+		if status != http.StatusBadRequest {
+			t.Fatalf("status for %q = %d, want 400", path, status)
+		}
+	}
+}
+
+func TestUsageLogAPIDefaultsLimitWhenOmitted(t *testing.T) {
+	svc := &fakeUsageSummaryService{}
+	srv := newUsageTestServer(t, svc)
+
+	_, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/log", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if svc.logLimit != 50 {
+		t.Fatalf("default limit = %d, want 50", svc.logLimit)
+	}
+	if svc.logFrom != nil || svc.logTo != nil || svc.logBefore != nil {
+		t.Fatalf("default log params = from %v to %v before %v, want all nil", svc.logFrom, svc.logTo, svc.logBefore)
 	}
 }

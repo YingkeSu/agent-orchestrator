@@ -1660,6 +1660,105 @@ func (q *Queries) ListUsageDiscoveryBindings(ctx context.Context, limit int64) (
 	return items, nil
 }
 
+const listUsageRequestLog = `-- name: ListUsageRequestLog :many
+SELECT
+    event.id,
+    event.created_at,
+    event.billing_provider_id,
+    event.model_id,
+    event.input_tokens,
+    event.cached_input_tokens,
+    event.output_tokens,
+    event.estimated_cost_nanos,
+    source.kind AS source_kind,
+    binding.session_id,
+    CAST(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS INTEGER) AS session_exists
+FROM model_usage_events event
+JOIN usage_sources source ON source.id = event.usage_source_id
+JOIN usage_bindings binding ON binding.id = event.binding_id
+LEFT JOIN sessions s ON s.id = binding.session_id
+WHERE (?1 IS NULL OR event.created_at >= ?1)
+  AND (?2 IS NULL OR event.created_at <= ?2)
+  AND (?3 IS NULL OR source.kind = ?3)
+  AND (?4 IS NULL OR event.model_id = ?4)
+  AND (?5 IS NULL OR event.id < ?5)
+ORDER BY event.id DESC
+LIMIT ?6
+`
+
+type ListUsageRequestLogParams struct {
+	From     interface{}
+	To       interface{}
+	Source   interface{}
+	Model    interface{}
+	BeforeID interface{}
+	Limit    int64
+}
+
+type ListUsageRequestLogRow struct {
+	ID                 int64
+	CreatedAt          sql.NullTime
+	BillingProviderID  sql.NullString
+	ModelID            string
+	InputTokens        sql.NullInt64
+	CachedInputTokens  sql.NullInt64
+	OutputTokens       sql.NullInt64
+	EstimatedCostNanos sql.NullInt64
+	SourceKind         domain.UsageSourceKind
+	SessionID          domain.SessionID
+	SessionExists      int64
+}
+
+// Newest-first, bounded page of normalized usage events over an optional
+// created_at range and optional exact source kind / model id filters, plus a
+// keyset cursor. The caller requests limit+1 rows to detect whether another
+// page exists, then truncates to limit. Ordering is by event id descending,
+// which is monotonic with insertion, NULL-safe (created_at is nullable and can
+// be backfilled out of timestamp order), and stable: the before cursor filters
+// by id, so a page never shifts as newer events are appended and no row can
+// vanish or repeat between pages.
+func (q *Queries) ListUsageRequestLog(ctx context.Context, arg ListUsageRequestLogParams) ([]ListUsageRequestLogRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUsageRequestLog,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+		arg.BeforeID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUsageRequestLogRow{}
+	for rows.Next() {
+		var i ListUsageRequestLogRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.BillingProviderID,
+			&i.ModelID,
+			&i.InputTokens,
+			&i.CachedInputTokens,
+			&i.OutputTokens,
+			&i.EstimatedCostNanos,
+			&i.SourceKind,
+			&i.SessionID,
+			&i.SessionExists,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsageSourcesForBinding = `-- name: ListUsageSourcesForBinding :many
 SELECT id, binding_id, kind, native_session_id, subagent_id, artifact_path, file_identity, generation, byte_offset, parser_state_json, state, failure_count, anomaly_count, next_retry_at, last_error_code, updated_at
 FROM usage_sources

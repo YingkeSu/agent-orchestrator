@@ -34,6 +34,13 @@ type usageSummaryStoreStub struct {
 	providerTo     *time.Time
 	providerSource string
 	providerModel  string
+	logRows        []domain.UsageRequestLogEntry
+	logFrom        *time.Time
+	logTo          *time.Time
+	logSource      string
+	logModel       string
+	logBefore      *int64
+	logLimit       int64
 }
 
 func (s *usageSummaryStoreStub) ListCompactSessionUsageAggregates(_ context.Context, id domain.ProjectID) ([]domain.CompactSessionUsageAggregate, error) {
@@ -60,6 +67,10 @@ func (s *usageSummaryStoreStub) AggregateUsageSummary(_ context.Context, from, t
 func (s *usageSummaryStoreStub) ListUsageSummaryDimensions(_ context.Context, from, to *time.Time, source, model string) (domain.UsageSummaryDimensions, error) {
 	s.calls[5]++
 	return s.dims, nil
+}
+func (s *usageSummaryStoreStub) ListUsageRequestLog(_ context.Context, from, to *time.Time, source, model string, beforeID *int64, limit int64) ([]domain.UsageRequestLogEntry, error) {
+	s.logFrom, s.logTo, s.logSource, s.logModel, s.logBefore, s.logLimit = from, to, source, model, beforeID, limit
+	return s.logRows, nil
 }
 
 func TestSummaryReaderListCompactUsesOneBatchRead(t *testing.T) {
@@ -419,5 +430,69 @@ func completeCostAggregate(events, total, input, cachedInput, output int64) doma
 		KnownInputCount:        events, KnownInputNanos: input,
 		KnownCachedInputCount: events, KnownCachedInputNanos: cachedInput,
 		KnownOutputCount: events, KnownOutputNanos: output,
+	}
+}
+
+func TestSummaryReaderListRequestLogHappyPath(t *testing.T) {
+	from, to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	before := int64(99)
+	input, cached, output, cost := int64(1100), int64(400), int64(200), int64(135)
+	store := &usageSummaryStoreStub{logRows: []domain.UsageRequestLogEntry{
+		{
+			ID: 5, CreatedAt: &to, BillingProviderID: "anthropic", ModelID: "claude-sonnet",
+			InputTokens: &input, CachedInputTokens: &cached, OutputTokens: &output,
+			EstimatedCostNanos: &cost, SourceKind: domain.UsageSourceClaudeMain,
+			SessionID: "reverb-12", SessionExists: true,
+		},
+	}}
+
+	page, err := NewSummaryReader(store).ListRequestLog(context.Background(), &from, &to, "codex_rollout", "gpt-5", &before, 20)
+	mustNoError(t, err)
+	if store.logFrom == nil || !store.logFrom.Equal(from) || store.logTo == nil || !store.logTo.Equal(to) ||
+		store.logSource != "codex_rollout" || store.logModel != "gpt-5" ||
+		store.logBefore == nil || *store.logBefore != 99 || store.logLimit != 20 {
+		t.Fatalf("log params = from %v to %v source %q model %q before %v limit %d", store.logFrom, store.logTo, store.logSource, store.logModel, store.logBefore, store.logLimit)
+	}
+	if len(page.Items) != 1 || page.Items[0].SessionExists != true || page.NextBeforeID != nil {
+		t.Fatalf("page = %+v", page)
+	}
+}
+
+func TestSummaryReaderListRequestLogSetsNextCursorWhenPageIsFull(t *testing.T) {
+	now := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	store := &usageSummaryStoreStub{logRows: []domain.UsageRequestLogEntry{
+		{ID: 3, CreatedAt: &now, ModelID: "a", SessionID: "s-1"},
+		{ID: 2, CreatedAt: &now, ModelID: "b", SessionID: "s-2"},
+		{ID: 1, CreatedAt: &now, ModelID: "c", SessionID: "s-3"},
+	}}
+
+	page, err := NewSummaryReader(store).ListRequestLog(context.Background(), nil, nil, "", "", nil, 2)
+	mustNoError(t, err)
+	if store.logLimit != 2 {
+		t.Fatalf("store limit = %d, want 2", store.logLimit)
+	}
+	if len(page.Items) != 2 || page.Items[0].ID != 3 || page.Items[1].ID != 2 {
+		t.Fatalf("items = %+v", page.Items)
+	}
+	if page.NextBeforeID == nil || *page.NextBeforeID != 2 {
+		t.Fatalf("nextBeforeId = %v, want 2", page.NextBeforeID)
+	}
+}
+
+func TestSummaryReaderListRequestLogClampsLimit(t *testing.T) {
+	now := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	store := &usageSummaryStoreStub{logRows: []domain.UsageRequestLogEntry{{ID: 1, CreatedAt: &now, SessionID: "s-1"}}}
+
+	if _, err := NewSummaryReader(store).ListRequestLog(context.Background(), nil, nil, "", "", nil, 0); err != nil {
+		t.Fatalf("zero limit: %v", err)
+	}
+	if store.logLimit != 1 {
+		t.Fatalf("zero limit clamped to %d, want 1", store.logLimit)
+	}
+	if _, err := NewSummaryReader(store).ListRequestLog(context.Background(), nil, nil, "", "", nil, 1000); err != nil {
+		t.Fatalf("oversize limit: %v", err)
+	}
+	if store.logLimit != maxRequestLogPageSize {
+		t.Fatalf("oversize limit clamped to %d, want %d", store.logLimit, maxRequestLogPageSize)
 	}
 }

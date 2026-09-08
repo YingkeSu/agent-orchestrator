@@ -1845,5 +1845,24 @@
 	"usage.sourceKind.kimiWire": "Kimi",
 	"usage.tab.models": "모델 통계",
 	"usage.tab.providers": "제공자 통계",
-	"usage.unattributed": "미귀속"
+	"usage.unattributed": "미귀속",
+	"usage.log.title": "요청 로그",
+	"usage.log.loading": "요청 로그 불러오는 중…",
+	"usage.log.loadFailed": "요청 로그를 불러올 수 없습니다.",
+	"usage.log.empty": "이 범위에 요청이 없습니다.",
+	"usage.log.time": "시간",
+	"usage.log.provider": "공급자",
+	"usage.log.model": "모델",
+	"usage.log.input": "입력",
+	"usage.log.output": "출력",
+	"usage.log.cost": "비용",
+	"usage.log.source": "소스",
+	"usage.log.session": "세션",
+	"usage.log.loadMore": "더 불러오기",
+	"usage.log.loadingMore": "불러오는 중…",
+	"usage.log.source.claude_main": "Claude 메인",
+	"usage.log.source.claude_subagent": "Claude 서브에이전트",
+	"usage.log.source.codex_rollout": "Codex 롤아웃",
+	"usage.log.source.kimi_wire": "Kimi 와이어"
+
 }

@@ -1476,6 +1476,53 @@ type ListUsageProviderStatsResponse struct {
 	Providers []UsageProviderStatsRow `json:"providers"`
 }
 
+// UsageRequestLogQuery is the query string accepted by GET /api/v1/usage/log.
+// from/to bound the created_at range (inclusive, RFC 3339), source/model are
+// exact-match filters over the usage source kind and model id, limit bounds the
+// page size, and before is the keyset cursor of the last seen event id.
+type UsageRequestLogQuery struct {
+	From   string `query:"from,omitempty" description:"Inclusive lower created_at bound (RFC 3339)." format:"date-time"`
+	To     string `query:"to,omitempty" description:"Inclusive upper created_at bound (RFC 3339)." format:"date-time"`
+	Source string `query:"source,omitempty" description:"Optional usage source kind filter (for example claude_main or codex_rollout)."`
+	Model  string `query:"model,omitempty" description:"Optional exact model id filter."`
+	Limit  int64  `query:"limit,omitempty" description:"Requested page size, clamped to a bounded maximum." minimum:"1"`
+	Before int64  `query:"before,omitempty" description:"Keyset cursor: return only events with id below this value." minimum:"1"`
+}
+
+// UsageRequestLogEntryResponse is one usage event on the request log. Token and
+// cost counters are null when unknown. createdAt is null when the event was
+// captured before timestamps existed. sessionExists reports whether the owning
+// session row still exists so the client can link to it only when it would open.
+type UsageRequestLogEntryResponse struct {
+	ID                 int64      `json:"id" format:"int64"`
+	CreatedAt          *time.Time `json:"createdAt" format:"date-time" description:"Event timestamp, null for pre-capture events."`
+	BillingProviderID  *string    `json:"billingProviderId" description:"Billing catalog provider, null when attribution is pending."`
+	ModelID            string     `json:"modelId"`
+	InputTokens        *int64     `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input."`
+	CachedInputTokens  *int64     `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache."`
+	OutputTokens       *int64     `json:"outputTokens" minimum:"0" description:"Total output."`
+	EstimatedCostNanos *int64     `json:"estimatedCostNanos" minimum:"0" description:"Durable nano-USD estimate, null when not yet priced."`
+	SourceKind         string     `json:"sourceKind" enum:"claude_main,claude_subagent,codex_rollout,kimi_wire"`
+	SessionID          string     `json:"sessionId" description:"Owning session id."`
+	SessionExists      bool       `json:"sessionExists" description:"Whether the owning session row still exists and can be opened."`
+}
+
+// UsageRequestLogResponse is one bounded page of request-log events.
+type UsageRequestLogResponse struct {
+	Items        []UsageRequestLogEntryResponse `json:"items"`
+	NextBeforeID *int64                         `json:"nextBeforeId" description:"Cursor for the next older page, null when this is the last page."`
+}
+
+// nullableString maps an empty attribution sentinel to a null pointer so
+// unattributed values stay explicit on the wire.
+func nullableString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+
+}
+
 // SystemRequirementsResponse is the body of GET /api/v1/system/requirements.
 type SystemRequirementsResponse = systemcheck.Report
 

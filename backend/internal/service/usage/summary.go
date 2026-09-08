@@ -11,6 +11,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
+// maxRequestLogPageSize bounds the request log page the daemon will return.
+const maxRequestLogPageSize int64 = 100
+
 type usageSummaryStore interface {
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	ListCompactSessionUsageAggregates(context.Context, domain.ProjectID) ([]domain.CompactSessionUsageAggregate, error)
@@ -20,6 +23,7 @@ type usageSummaryStore interface {
 	ListUsageSummaryDimensions(context.Context, *time.Time, *time.Time, string, string) (domain.UsageSummaryDimensions, error)
 	AggregateUsageByModel(context.Context, *time.Time, *time.Time, string, string) ([]domain.UsageModelScopeAggregate, error)
 	AggregateUsageByProvider(context.Context, *time.Time, *time.Time, string, string) ([]domain.UsageProviderScopeAggregate, error)
+	ListUsageRequestLog(context.Context, *time.Time, *time.Time, string, string, *int64, int64) ([]domain.UsageRequestLogEntry, error)
 }
 
 // SummaryReader derives token and estimated-cost summaries from normalized
@@ -125,6 +129,36 @@ func (r *SummaryReader) Global(ctx context.Context, from, to *time.Time, source,
 		Sources:      dims.Sources,
 		Models:       dims.Models,
 	}, nil
+}
+
+// ListRequestLog returns one bounded, newest-first page of usage events over an
+// optional created_at range, optionally narrowed by an exact source kind or
+// model id. limit is the requested page size and is clamped to
+// [1, maxRequestLogPageSize]. A nil beforeID returns the newest page; pass the
+// previous page's NextBeforeID to page older. Ordering is by event id
+// descending (monotonic with insertion, NULL-safe, stable), so the id cursor
+// never drops or repeats a row across pages.
+func (r *SummaryReader) ListRequestLog(ctx context.Context, from, to *time.Time, source, model string, beforeID *int64, limit int64) (domain.UsageRequestLogPage, error) {
+	if r == nil || r.store == nil {
+		return domain.UsageRequestLogPage{}, fmt.Errorf("usage summary store is unavailable")
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > maxRequestLogPageSize {
+		limit = maxRequestLogPageSize
+	}
+	rows, err := r.store.ListUsageRequestLog(ctx, from, to, source, model, beforeID, limit)
+	if err != nil {
+		return domain.UsageRequestLogPage{}, err
+	}
+	var nextBeforeID *int64
+	if len(rows) > int(limit) {
+		rows = rows[:limit]
+		last := rows[len(rows)-1].ID
+		nextBeforeID = &last
+	}
+	return domain.UsageRequestLogPage{Items: rows, NextBeforeID: nextBeforeID}, nil
 }
 
 // cacheHitRate returns cached input divided by cached plus uncached input. Both

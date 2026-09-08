@@ -10,6 +10,8 @@ import { agentSwitchesQueryRoot } from "../hooks/useAgentSwitches";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
 import { usageSummaryQueryRoot } from "../hooks/useUsageSummary";
 import { usageModelStatsQueryRoot, usageProviderStatsQueryRoot } from "../hooks/useUsageAggregates";
+import { usageRequestLogQueryRoot } from "../hooks/useUsageRequestLog";
+
 import { agentSwitchVisibility } from "./agent-switch-visibility";
 import { codexAccountsQueryKey, writeCodexAccounts } from "../hooks/codex-accounts-state";
 import type { components } from "../../api/schema";
@@ -164,6 +166,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						invalidate(usageSummaryQueryRoot);
 						invalidate(usageModelStatsQueryRoot);
 						invalidate(usageProviderStatsQueryRoot);
+						invalidate(usageRequestLogQueryRoot);
+
 						workspaceInvalidationPending = false;
 					}
 					for (const sessionId of pendingConversationSessions) {

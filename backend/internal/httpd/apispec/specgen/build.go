@@ -747,6 +747,18 @@ func usageOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/log", id: "getUsageRequestLog", tag: "usage",
+			summary:    "List a bounded, newest-first page of usage events over an optional time range",
+			pathParams: []any{controllers.UsageRequestLogQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageRequestLogResponse{}},
+
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
 	}
 }
 

@@ -412,6 +412,33 @@ type UsageSummaryDimensions struct {
 	Models  []string
 }
 
+// UsageRequestLogEntry is one normalized usage event on the request-log read
+// model. Token and cost counters stay nil when unknown. CreatedAt is nil when
+// the event predates timestamp capture. SessionExists reports whether the
+// owning session row still exists so the client can render a link only when
+// opening the session would succeed.
+type UsageRequestLogEntry struct {
+	ID                 int64
+	CreatedAt          *time.Time
+	BillingProviderID  string
+	ModelID            string
+	InputTokens        *int64
+	CachedInputTokens  *int64
+	OutputTokens       *int64
+	EstimatedCostNanos *int64
+	SourceKind         UsageSourceKind
+	SessionID          SessionID
+	SessionExists      bool
+}
+
+// UsageRequestLogPage is one bounded, newest-first page of usage events plus
+// the cursor needed to fetch the next older page. NextBeforeID is the id of the
+// last entry on the page; pass it as the before cursor to continue paging.
+type UsageRequestLogPage struct {
+	Items        []UsageRequestLogEntry
+	NextBeforeID *int64
+}
+
 // UsageMetricTotals is the aggregate metric block used by session, harness,
 // and model summaries.
 type UsageMetricTotals struct {
