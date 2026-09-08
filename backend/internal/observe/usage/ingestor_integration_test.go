@@ -1064,7 +1064,7 @@ func TestIngestorStopsRetryingConflictingNativeEvent(t *testing.T) {
 		ByteOffset: 0,
 		State:      domain.UsageSourcePending,
 		UpdatedAt:  now,
-	}, []domain.ModelUsageEvent{conflict}); err != nil {
+	}, []domain.ModelUsageEvent{conflict}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1192,12 +1192,13 @@ func (s *applyInterleavingStore) ApplyUsageChunk(
 	expectedRevision time.Time,
 	nextState domain.SourceCursorState,
 	events []domain.ModelUsageEvent,
+	timing []domain.UsageEventTiming,
 ) error {
 	if beforeApply := s.beforeApply; beforeApply != nil {
 		s.beforeApply = nil
 		beforeApply()
 	}
-	return s.Store.ApplyUsageChunk(ctx, sourceID, expectedOffset, expectedRevision, nextState, events)
+	return s.Store.ApplyUsageChunk(ctx, sourceID, expectedOffset, expectedRevision, nextState, events, timing)
 }
 
 func assertTokenAggregate(t *testing.T, store *sqlite.Store, sessionID domain.SessionID, total int64) {

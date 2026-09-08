@@ -391,7 +391,7 @@ func testCollectorCodexBudgetFinalizationWaitsThenPersistsPartialAcrossRestart(t
 		Tokens:            testUsageMetrics(10, 0, 10, 2),
 		ProviderUsageJSON: `{"last_token_usage":{"cache_write_input_tokens":0}}`,
 		SourceEventKey:    "budget-root-event",
-	}}); err != nil {
+	}}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -509,7 +509,7 @@ func setCodexDiscoveredChildren(
 		FailureCount:    source.FailureCount,
 		AnomalyCount:    source.AnomalyCount,
 		UpdatedAt:       time.Now().UTC(),
-	}, nil)
+	}, nil, nil)
 	mustNoError(t, err)
 }
 

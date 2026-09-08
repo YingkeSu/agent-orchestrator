@@ -24,6 +24,7 @@ type jsonlRecord struct {
 
 type parseResult struct {
 	Events                 []domain.ModelUsageEvent
+	Timing                 []domain.UsageEventTiming
 	Cursor                 domain.SourceCursorState
 	newCodexChild          bool
 	pendingCodexSpawnCalls int
@@ -45,7 +46,7 @@ func parseRecordsWithState(
 		parseCodex(source, records, state.Codex, &result)
 		result.pendingCodexSpawnCalls = len(state.Codex.PendingSpawnCallIDs)
 	case domain.UsageSourceKimiWire:
-		parseKimi(source, records, &result)
+		parseKimi(source, records, state.Kimi, &result)
 	default:
 		result.Cursor.AnomalyCount++
 		result.Cursor.LastErrorCode = domain.UsageErrorUnsupportedSourceFormat
@@ -92,6 +93,7 @@ type parserStateEnvelope struct {
 	Integrity  *parserIntegrityStateV1 `json:"integrity,omitempty"`
 	Claude     *claudeParserStateV1    `json:"claude,omitempty"`
 	Codex      *codexParserStateV1     `json:"codex,omitempty"`
+	Kimi       *kimiParserStateV1      `json:"kimi,omitempty"`
 }
 
 type parserIntegrityStateV1 struct {
@@ -123,6 +125,35 @@ type claudeParserStateV1 struct {
 	// onto every event newly ingested from such a source, marked observed and
 	// therefore beyond every repair path.
 	LegacyProvider string `json:"provider,omitempty"`
+
+	// Timing is the durable round/timing accumulator (timing ADR Decision 2).
+	// Old sources decode with the field absent and simply start timing
+	// collection at their cursor.
+	Timing *claudeTimingStateV1 `json:"timing,omitempty"`
+}
+
+// claudeTimingStateV1 is the Claude parser's durable timing accumulator.
+// LastUserTime/LastUserIsPrompt anchor LLM elapsed and first-token for the next
+// assistant usage record; RoundSeq counts human-prompt round boundaries; a
+// pending tool anchor records an assistant completion whose tool_result record
+// has not been read yet, so tool elapsed can be closed when it arrives.
+type claudeTimingStateV1 struct {
+	RoundSeq         int64                `json:"round_seq,omitempty"`
+	HasSteps         bool                 `json:"has_steps,omitempty"`
+	LastUserTime     string               `json:"last_user_time,omitempty"`
+	LastUserIsPrompt bool                 `json:"last_user_is_prompt,omitempty"`
+	PendingTool      *claudePendingToolV1 `json:"pending_tool,omitempty"`
+}
+
+// claudePendingToolV1 remembers one assistant usage record awaiting its
+// tool_result, together with the timing facts already derived for it, so a
+// later chunk can close tool elapsed without re-deriving the event.
+type claudePendingToolV1 struct {
+	SourceEventKey string `json:"source_event_key,omitempty"`
+	AssistantTime  string `json:"assistant_time,omitempty"`
+	RoundSeq       int64  `json:"round_seq,omitempty"`
+	LLMMS          *int64 `json:"llm_ms,omitempty"`
+	FirstTokenMS   *int64 `json:"first_token_ms,omitempty"`
 }
 
 type codexParserStateV1 struct {
@@ -135,6 +166,36 @@ type codexParserStateV1 struct {
 	DirectParentID      string   `json:"direct_parent_id,omitempty"`
 	PendingSpawnCallIDs []string `json:"pending_spawn_call_ids"`
 	DiscoveredChildIDs  []string `json:"discovered_child_ids"`
+
+	Timing *codexTimingStateV1 `json:"timing,omitempty"`
+}
+
+// codexTimingStateV1 is the Codex parser's durable timing accumulator.
+// TurnAnchorTime is the most recent turn_context record timestamp; RoundSeq
+// counts turn boundaries. When the turn's first assistant message response
+// arrives after its first usage event, FirstResponseKey/FirstResponseLLMMS
+// remember that event so the close can refresh its first-token without
+// overwriting the LLM elapsed already stored for it.
+type codexTimingStateV1 struct {
+	RoundSeq             int64  `json:"round_seq,omitempty"`
+	HasSteps             bool   `json:"has_steps,omitempty"`
+	TurnAnchorTime       string `json:"turn_anchor_time,omitempty"`
+	TurnAnchorSet        bool   `json:"turn_anchor_set,omitempty"`
+	FirstResponsePending bool   `json:"first_response_pending,omitempty"`
+	FirstResponseKey     string `json:"first_response_key,omitempty"`
+	FirstResponseLLMMS   *int64 `json:"first_response_llm_ms,omitempty"`
+	FirstTokenMS         *int64 `json:"first_token_ms,omitempty"`
+}
+
+// kimiParserStateV1 is the Kimi parser's durable timing accumulator. Kimi wire
+// records carry stable native IDs, so the state holds only the timing facts the
+// usage.record needs: the most recent user message anchor and the round
+// counter.
+type kimiParserStateV1 struct {
+	RoundSeq         int64  `json:"round_seq,omitempty"`
+	HasSteps         bool   `json:"has_steps,omitempty"`
+	LastUserTime     string `json:"last_user_time,omitempty"`
+	LastUserIsPrompt bool   `json:"last_user_is_prompt,omitempty"`
 }
 
 func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, error) {
@@ -178,12 +239,15 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 	}
 	switch source.Kind {
 	case domain.UsageSourceClaudeMain, domain.UsageSourceClaudeSubagent:
-		if state.Claude == nil || state.Codex != nil {
+		if state.Claude == nil || state.Codex != nil || state.Kimi != nil {
 			return nil, errors.New("claude state has invalid parser payload")
 		}
 		state.Claude.LegacyProvider = ""
+		if state.Claude.Timing == nil {
+			state.Claude.Timing = &claudeTimingStateV1{}
+		}
 	case domain.UsageSourceCodexRollout:
-		if state.Codex == nil || state.Claude != nil {
+		if state.Codex == nil || state.Claude != nil || state.Kimi != nil {
 			return nil, errors.New("codex state has invalid parser payload")
 		}
 		state.Codex.LegacyProvider = ""
@@ -193,6 +257,9 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 		if state.Codex.DiscoveredChildIDs == nil {
 			state.Codex.DiscoveredChildIDs = []string{}
 		}
+		if state.Codex.Timing == nil {
+			state.Codex.Timing = &codexTimingStateV1{}
+		}
 		if err := normalizeCodexParserState(state.Codex); err != nil {
 			return nil, err
 		}
@@ -201,7 +268,10 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 		}
 	case domain.UsageSourceKimiWire:
 		if state.Claude != nil || state.Codex != nil {
-			return nil, errors.New("append-only state has invalid parser payload")
+			return nil, errors.New("kimi state has invalid parser payload")
+		}
+		if state.Kimi == nil {
+			state.Kimi = &kimiParserStateV1{}
 		}
 	default:
 		return nil, fmt.Errorf("unsupported source kind %q", source.Kind)
@@ -216,15 +286,18 @@ func newParserState(kind domain.UsageSourceKind) (*parserStateEnvelope, error) {
 	}
 	switch kind {
 	case domain.UsageSourceClaudeMain, domain.UsageSourceClaudeSubagent:
-		state.Claude = &claudeParserStateV1{}
+		state.Claude = &claudeParserStateV1{Timing: &claudeTimingStateV1{}}
 	case domain.UsageSourceCodexRollout:
 		state.Codex = &codexParserStateV1{
 			PendingSpawnCallIDs: []string{},
 			DiscoveredChildIDs:  []string{},
+			Timing:              &codexTimingStateV1{},
 		}
 	case domain.UsageSourceKimiWire:
 		// Kimi records carry stable native IDs, so no provider-specific
-		// cumulative baseline is required.
+		// cumulative baseline is required. Timing facts still need the durable
+		// round/user anchor accumulator.
+		state.Kimi = &kimiParserStateV1{}
 	default:
 		return nil, fmt.Errorf("unsupported source kind %q", kind)
 	}
@@ -266,7 +339,11 @@ type claudeTranscriptRecord struct {
 		ID         string  `json:"id"`
 		Model      string  `json:"model"`
 		Provider   string  `json:"provider"`
+		Role       string  `json:"role"`
 		StopReason *string `json:"stop_reason"`
+		// Content is decoded on demand to tell a human-turn user record from a
+		// tool_result carrier (the timing ADR's round-prompt marker).
+		Content json.RawMessage `json:"content"`
 		// Decoded twice on purpose: the typed view drives the neutral counters,
 		// and the raw bytes are the bounded provider object stored verbatim so
 		// fields Anthropic adds later survive without a schema change here.
@@ -287,7 +364,14 @@ type claudeNativeUsage struct {
 
 func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state *claudeParserStateV1, result *parseResult) {
 	eventsByKey := make(map[string]domain.ModelUsageEvent)
-	for _, record := range records {
+	timing := state.Timing
+	if timing == nil {
+		timing = &claudeTimingStateV1{}
+	}
+	if timing.RoundSeq == 0 {
+		timing.RoundSeq = 1
+	}
+	for index, record := range records {
 		var native claudeTranscriptRecord
 		if err := json.Unmarshal(record.Data, &native); err != nil {
 			recordMalformed(result)
@@ -301,11 +385,53 @@ func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state 
 		if nativeProvider != "" {
 			state.Provider = nativeProvider
 		}
-		if native.Type != "assistant" || !jsonValueReported(native.Message.Usage) ||
-			native.Message.StopReason == nil || strings.TrimSpace(*native.Message.StopReason) == "" {
+		// Sidechain records are the main transcript's view of other sessions;
+		// they never contribute timing anchors to this source (claude_main
+		// skips them for usage too).
+		if source.Source.Kind == domain.UsageSourceClaudeMain && native.IsSidechain {
 			continue
 		}
-		if source.Source.Kind == domain.UsageSourceClaudeMain && native.IsSidechain {
+		if native.Type == "user" {
+			switch claudeUserMessageKind(native.Message.Content) {
+			case claudeUserKindPrompt:
+				// A human turn starts a new round and anchors first-token and
+				// LLM elapsed for the next assistant usage record. The first
+				// prompt of a transcript starts round 1; a prompt between
+				// steps starts the next round (the ADR's "human prompt between
+				// two steps" boundary).
+				if timing.HasSteps {
+					timing.RoundSeq++
+					timing.HasSteps = false
+				}
+				timing.LastUserTime = native.Timestamp
+				timing.LastUserIsPrompt = true
+				timing.PendingTool = nil
+			case claudeUserKindToolResult:
+				// Close the tool elapsed of the assistant usage record that
+				// requested the tool, when its completion was read in an
+				// earlier chunk.
+				if pending := timing.PendingTool; pending != nil {
+					timing.PendingTool = nil
+					if toolMS := usageIntervalMS(
+						parseUsageTimestamp(pending.AssistantTime),
+						parseUsageTimestamp(native.Timestamp),
+					); toolMS != nil {
+						result.Timing = append(result.Timing, domain.UsageEventTiming{
+							SourceEventKey: pending.SourceEventKey,
+							RoundSeq:       pending.RoundSeq,
+							LLMMS:          pending.LLMMS,
+							ToolMS:         toolMS,
+							FirstTokenMS:   pending.FirstTokenMS,
+						})
+					}
+				}
+				timing.LastUserTime = native.Timestamp
+				timing.LastUserIsPrompt = false
+			}
+			continue
+		}
+		if native.Type != "assistant" || !jsonValueReported(native.Message.Usage) ||
+			native.Message.StopReason == nil || strings.TrimSpace(*native.Message.StopReason) == "" {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(native.Message.Model), "<synthetic>") {
@@ -364,9 +490,135 @@ func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state 
 			}
 			continue
 		}
+		// Timing (timing ADR Decision 1): LLM elapsed is the assistant usage
+		// record minus the preceding user record; first-token is that same
+		// interval when the preceding user record was the round's human prompt;
+		// tool elapsed is the following tool_result user record minus the
+		// assistant record. Missing anchors stay nil.
+		recordTime := parseUsageTimestamp(native.Timestamp)
+		llmMS := usageIntervalMS(parseUsageTimestamp(timing.LastUserTime), recordTime)
+		var firstTokenMS *int64
+		if timing.LastUserIsPrompt {
+			firstTokenMS = llmMS
+		}
+		var toolMS *int64
+		if strings.TrimSpace(*native.Message.StopReason) == "tool_use" && !recordTime.IsZero() {
+			if nextToolTime, ok := claudeNextToolResultTime(records[index+1:]); ok {
+				toolMS = usageIntervalMS(recordTime, nextToolTime)
+			} else {
+				// The tool_result record is not in this chunk. Remember the
+				// completion so a later chunk can close tool elapsed.
+				timing.PendingTool = &claudePendingToolV1{
+					SourceEventKey: event.SourceEventKey,
+					AssistantTime:  native.Timestamp,
+					RoundSeq:       timing.RoundSeq,
+					LLMMS:          llmMS,
+					FirstTokenMS:   firstTokenMS,
+				}
+			}
+		}
 		eventsByKey[event.SourceEventKey] = event
+		timing.HasSteps = true
 		result.Events = append(result.Events, event)
+		result.Timing = append(result.Timing, domain.UsageEventTiming{
+			SourceEventKey: event.SourceEventKey,
+			RoundSeq:       timing.RoundSeq,
+			LLMMS:          llmMS,
+			ToolMS:         toolMS,
+			FirstTokenMS:   firstTokenMS,
+		})
 	}
+	state.Timing = timing
+}
+
+// claudeUserKind classifies a Claude Code user record's content.
+type claudeUserKind int
+
+const (
+	// claudeUserKindNone is a user record with no certifiable content (absent,
+	// empty, or unrecognized shape); it is not a timing boundary.
+	claudeUserKindNone claudeUserKind = iota
+	// claudeUserKindPrompt is a human turn: real text input.
+	claudeUserKindPrompt
+	// claudeUserKindToolResult is a tool_result carrier.
+	claudeUserKindToolResult
+)
+
+// claudeUserMessageKind distinguishes a human-turn user record from a
+// tool_result carrier by its content blocks, per the timing ADR's round-prompt
+// marker rule (open item 4).
+func claudeUserMessageKind(content json.RawMessage) claudeUserKind {
+	trimmed := bytes.TrimSpace(content)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return claudeUserKindNone
+	}
+	if trimmed[0] == '"' {
+		return claudeUserKindPrompt
+	}
+	if trimmed[0] != '[' {
+		return claudeUserKindNone
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(trimmed, &blocks) != nil {
+		return claudeUserKindNone
+	}
+	hasText := false
+	hasToolResult := false
+	for _, block := range blocks {
+		switch block.Type {
+		case "tool_result":
+			hasToolResult = true
+		case "text":
+			hasText = true
+		}
+	}
+	switch {
+	case hasText:
+		return claudeUserKindPrompt
+	case hasToolResult:
+		return claudeUserKindToolResult
+	default:
+		return claudeUserKindNone
+	}
+}
+
+// claudeNextToolResultTime returns the timestamp of the next user record that
+// carries a tool_result, scanning forward from the records that follow one
+// assistant usage record. A human-turn user record before any tool_result means
+// the tool_result anchor is absent, so it returns not-found rather than
+// guessing.
+func claudeNextToolResultTime(records []jsonlRecord) (time.Time, bool) {
+	for _, record := range records {
+		var native claudeTranscriptRecord
+		if json.Unmarshal(record.Data, &native) != nil {
+			continue
+		}
+		if native.Type != "user" {
+			continue
+		}
+		switch claudeUserMessageKind(native.Message.Content) {
+		case claudeUserKindToolResult:
+			return parseUsageTimestamp(native.Timestamp), true
+		case claudeUserKindPrompt:
+			return time.Time{}, false
+		}
+	}
+	return time.Time{}, false
+}
+
+// usageIntervalMS converts a transcript-clock interval to non-negative
+// milliseconds. A missing or inverted boundary is unknown, never zero.
+func usageIntervalMS(start, end time.Time) *int64 {
+	if start.IsZero() || end.IsZero() {
+		return nil
+	}
+	ms := end.Sub(start).Milliseconds()
+	if ms < 0 {
+		return nil
+	}
+	return int64Ptr(ms)
 }
 
 // canonicalBillingProvider normalizes one observed routing fact into a catalog
@@ -387,6 +639,13 @@ type codexEnvelope struct {
 }
 
 func parseCodex(source domain.UsageSourceContext, records []jsonlRecord, state *codexParserStateV1, result *parseResult) {
+	timing := state.Timing
+	if timing == nil {
+		timing = &codexTimingStateV1{}
+	}
+	if timing.RoundSeq == 0 {
+		timing.RoundSeq = 1
+	}
 	for _, record := range records {
 		var envelope codexEnvelope
 		if err := json.Unmarshal(record.Data, &envelope); err != nil {
@@ -408,12 +667,66 @@ func parseCodex(source domain.UsageSourceContext, records []jsonlRecord, state *
 			if json.Unmarshal(envelope.Payload, &payload) == nil {
 				state.ModelID = firstNonEmpty(payload.Model, state.ModelID)
 			}
+			// A turn_context starts a new turn: a round boundary whose anchor
+			// times LLM elapsed and first-token for the turn's usage events.
+			// The first turn of a transcript is round 1; a later turn_context
+			// after usage events starts the next round.
+			if timing.HasSteps {
+				timing.RoundSeq++
+				timing.HasSteps = false
+			}
+			timing.TurnAnchorTime = envelope.Timestamp
+			timing.TurnAnchorSet = !parseUsageTimestamp(envelope.Timestamp).IsZero()
+			timing.FirstResponsePending = true
+			timing.FirstResponseKey = ""
+			timing.FirstTokenMS = nil
 		case "event_msg":
 			parseCodexEvent(source, envelope, state, result)
 		case "response_item":
 			parseCodexResponseItem(envelope.Payload, state, result)
+			parseCodexResponseTiming(envelope, state, result)
 		}
 	}
+	state.Timing = timing
+}
+
+// parseCodexResponseTiming anchors the current turn's first-token on the first
+// assistant message response after a turn_context, per the timing ADR Decision
+// 3 (prompt/turn record to first assistant response record). The interval is
+// either held for the next usage event or dispatched to the first usage event
+// of the turn when that event was already read.
+func parseCodexResponseTiming(envelope codexEnvelope, state *codexParserStateV1, result *parseResult) {
+	timing := state.Timing
+	if timing == nil || !timing.FirstResponsePending {
+		return
+	}
+	var item struct {
+		Type string `json:"type"`
+		Role string `json:"role"`
+	}
+	if json.Unmarshal(envelope.Payload, &item) != nil || item.Type != "message" || item.Role != "assistant" {
+		return
+	}
+	interval := usageIntervalMS(
+		parseUsageTimestamp(timing.TurnAnchorTime),
+		parseUsageTimestamp(envelope.Timestamp),
+	)
+	if timing.FirstResponseKey != "" {
+		if interval != nil {
+			result.Timing = append(result.Timing, domain.UsageEventTiming{
+				SourceEventKey: timing.FirstResponseKey,
+				RoundSeq:       timing.RoundSeq,
+				LLMMS:          timing.FirstResponseLLMMS,
+				FirstTokenMS:   interval,
+			})
+		}
+		timing.FirstResponseKey = ""
+		timing.FirstResponseLLMMS = nil
+		timing.FirstResponsePending = false
+		return
+	}
+	timing.FirstTokenMS = interval
+	timing.FirstResponsePending = false
 }
 
 func parseCodexResponseItem(raw json.RawMessage, state *codexParserStateV1, result *parseResult) {
@@ -719,6 +1032,33 @@ func parseCodexEvent(source domain.UsageSourceContext, envelope codexEnvelope, s
 		),
 	}
 	result.Events = append(result.Events, event)
+	// Timing (timing ADR Decision 1): LLM elapsed is the usage record minus the
+	// turn_context anchor; first-token is the turn anchor to the first assistant
+	// response, attached to the first usage event of the turn. Tool elapsed is
+	// not certified for Codex rollout in V1.
+	timing := state.Timing
+	if timing == nil {
+		return
+	}
+	timing.HasSteps = true
+	llmMS := usageIntervalMS(
+		parseUsageTimestamp(timing.TurnAnchorTime),
+		parseUsageTimestamp(envelope.Timestamp),
+	)
+	var firstTokenMS *int64
+	if timing.FirstTokenMS != nil {
+		firstTokenMS = timing.FirstTokenMS
+		timing.FirstTokenMS = nil
+	} else if timing.FirstResponsePending && timing.FirstResponseKey == "" && timing.TurnAnchorSet {
+		timing.FirstResponseKey = event.SourceEventKey
+		timing.FirstResponseLLMMS = llmMS
+	}
+	result.Timing = append(result.Timing, domain.UsageEventTiming{
+		SourceEventKey: event.SourceEventKey,
+		RoundSeq:       timing.RoundSeq,
+		LLMMS:          llmMS,
+		FirstTokenMS:   firstTokenMS,
+	})
 }
 
 func recordMalformed(result *parseResult) {

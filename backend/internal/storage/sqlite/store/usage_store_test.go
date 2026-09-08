@@ -415,7 +415,7 @@ func TestUsageMutationsEmitSessionUpdatedCDC(t *testing.T) {
 	}, []domain.ModelUsageEvent{usageEvent(
 		"event-1",
 		canonicalUsageTokens(10, 0, 10, 2),
-	)})
+	)}, nil)
 	mustNoError(t, err)
 	// New totals invalidate usage once after the transaction commits.
 	assertUsageSessionUpdatedEvents(t, s, base, sess, 1)
@@ -431,7 +431,7 @@ func TestUsageMutationsEmitSessionUpdatedCDC(t *testing.T) {
 		ByteOffset: 20,
 		State:      domain.UsageSourceActive,
 		UpdatedAt:  now.Add(time.Second),
-	}, nil)
+	}, nil, nil)
 	mustNoError(t, err)
 	assertUsageSessionUpdatedEvents(t, s, base, sess, 0)
 }
@@ -478,7 +478,7 @@ func TestApplyUsageChunkAtomicReplayAndTokenAggregates(t *testing.T) {
 		State:           domain.UsageSourceActive,
 		ParserStateJSON: `{"version":1,"source_kind":"codex_rollout","codex":{"baseline":{"input_tokens":100}}}`,
 		UpdatedAt:       now,
-	}, []domain.ModelUsageEvent{event})
+	}, []domain.ModelUsageEvent{event}, nil)
 	if err != nil {
 		t.Fatalf("apply chunk: %v", err)
 	}
@@ -487,7 +487,7 @@ func TestApplyUsageChunkAtomicReplayAndTokenAggregates(t *testing.T) {
 		State:           domain.UsageSourceActive,
 		ParserStateJSON: `{"version":1,"source_kind":"codex_rollout","codex":{"baseline":{"input_tokens":100},"model_id":"gpt-5.6"}}`,
 		UpdatedAt:       now.Add(time.Second),
-	}, []domain.ModelUsageEvent{event})
+	}, []domain.ModelUsageEvent{event}, nil)
 	if err != nil {
 		t.Fatalf("apply duplicate chunk: %v", err)
 	}
@@ -536,14 +536,14 @@ func TestAggregateUsageSummaryAggregatesAcrossSessionsAndRange(t *testing.T) {
 	}
 	mustNoError(t, s.ApplyUsageChunk(ctx, codexSource.ID, 0, codexSource.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: day1,
-	}, []domain.ModelUsageEvent{codexEvent}))
+	}, []domain.ModelUsageEvent{codexEvent}, nil))
 
 	// Day 5: a claude event with known cached/uncached split.
 	claudeEvent := anthropicUsageEvent("claude-day5", 20, 10, 40, 15)
 	claudeEvent.CreatedAt = day2
 	mustNoError(t, s.ApplyUsageChunk(ctx, claudeSource.ID, 0, claudeSource.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: day2,
-	}, []domain.ModelUsageEvent{claudeEvent}))
+	}, []domain.ModelUsageEvent{claudeEvent}, nil))
 
 	// Unbounded: both events aggregate.
 	all, err := s.AggregateUsageSummary(ctx, nil, nil, "", "")
@@ -715,7 +715,7 @@ func TestApplyUsageChunkPersistsProviderSplitsAndPassiveCosts(t *testing.T) {
 	}
 	if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
-	}, []domain.ModelUsageEvent{event}); err != nil {
+	}, []domain.ModelUsageEvent{event}, nil); err != nil {
 		t.Fatalf("apply priced source event: %v", err)
 	}
 
@@ -865,7 +865,7 @@ func TestApplyUsageCostUpdatesCommitsBatchAndTouchesEachBindingOnce(t *testing.T
 	} {
 		mustNoError(t, s.ApplyUsageChunk(ctx, seeded.source.ID, 0, seeded.source.UpdatedAt, domain.SourceCursorState{
 			ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
-		}, seeded.events))
+		}, seeded.events, nil))
 	}
 	candidates, err := s.ListUsageCostCandidates(ctx, "openai", "catalog-v2", 0)
 	mustNoError(t, err)
@@ -950,7 +950,7 @@ func TestApplyUsageCostUpdatesRefusesStaleFactsVersionAndKnownZero(t *testing.T)
 	}
 	mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
-	}, events))
+	}, events, nil))
 	candidates, err := s.ListUsageCostCandidates(ctx, "openai", "catalog-v2", 0)
 	mustNoError(t, err)
 	if len(candidates) != 3 {
@@ -1015,7 +1015,7 @@ func TestApplyLegacyUsageRepairsUsesExactSourceFactsAndPreservesCursor(t *testin
 	mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 123, ParserStateJSON: parserState,
 		State: domain.UsageSourceActive, UpdatedAt: now.Add(time.Second),
-	}, []domain.ModelUsageEvent{event}))
+	}, []domain.ModelUsageEvent{event}, nil))
 
 	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db"))
 	mustNoError(t, err)
@@ -1142,7 +1142,7 @@ func TestApplyUsageChunkReplayComparesNewSourceFactsButNotCosts(t *testing.T) {
 	event.BillingProviderID = "anthropic"
 	event.BillingProviderSource = domain.UsageBillingProviderObserved
 	event.ProviderUsageJSON = anthropicProviderUsage(5, 10, &fiveMinutes, &oneHour)
-	if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now}, []domain.ModelUsageEvent{event}); err != nil {
+	if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now}, []domain.ModelUsageEvent{event}, nil); err != nil {
 		t.Fatalf("seed event: %v", err)
 	}
 
@@ -1150,19 +1150,19 @@ func TestApplyUsageChunkReplayComparesNewSourceFactsButNotCosts(t *testing.T) {
 	replay := event
 	replay.Costs.EstimatedCostNanos = &differentCost
 	replay.Costs.PricingVersion = "later-version"
-	if err := s.ApplyUsageChunk(ctx, source.ID, 10, now, domain.SourceCursorState{ByteOffset: 20, State: domain.UsageSourceActive, UpdatedAt: now.Add(time.Second)}, []domain.ModelUsageEvent{replay}); err != nil {
+	if err := s.ApplyUsageChunk(ctx, source.ID, 10, now, domain.SourceCursorState{ByteOffset: 20, State: domain.UsageSourceActive, UpdatedAt: now.Add(time.Second)}, []domain.ModelUsageEvent{replay}, nil); err != nil {
 		t.Fatalf("cost-only replay conflict: %v", err)
 	}
 
 	providerConflict := event
 	providerConflict.BillingProviderID = "zai"
-	if err := s.ApplyUsageChunk(ctx, source.ID, 20, now.Add(time.Second), domain.SourceCursorState{ByteOffset: 30, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second)}, []domain.ModelUsageEvent{providerConflict}); !errors.Is(err, domain.ErrUsageSourceEventConflict) {
+	if err := s.ApplyUsageChunk(ctx, source.ID, 20, now.Add(time.Second), domain.SourceCursorState{ByteOffset: 30, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second)}, []domain.ModelUsageEvent{providerConflict}, nil); !errors.Is(err, domain.ErrUsageSourceEventConflict) {
 		t.Fatalf("provider replay err = %v, want source conflict", err)
 	}
 	otherFiveMinutes, otherOneHour := int64(6), int64(4)
 	splitConflict := event
 	splitConflict.ProviderUsageJSON = anthropicProviderUsage(5, 10, &otherFiveMinutes, &otherOneHour)
-	if err := s.ApplyUsageChunk(ctx, source.ID, 20, now.Add(time.Second), domain.SourceCursorState{ByteOffset: 30, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second)}, []domain.ModelUsageEvent{splitConflict}); !errors.Is(err, domain.ErrUsageSourceEventConflict) {
+	if err := s.ApplyUsageChunk(ctx, source.ID, 20, now.Add(time.Second), domain.SourceCursorState{ByteOffset: 30, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second)}, []domain.ModelUsageEvent{splitConflict}, nil); !errors.Is(err, domain.ErrUsageSourceEventConflict) {
 		t.Fatalf("split replay err = %v, want source conflict", err)
 	}
 
@@ -1170,7 +1170,7 @@ func TestApplyUsageChunkReplayComparesNewSourceFactsButNotCosts(t *testing.T) {
 	// enrichment rather than a conflict.
 	kindConflict := event
 	kindConflict.MeasurementKind = domain.UsageMeasurementUnknown
-	if err := s.ApplyUsageChunk(ctx, source.ID, 20, now.Add(time.Second), domain.SourceCursorState{ByteOffset: 30, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second)}, []domain.ModelUsageEvent{kindConflict}); !errors.Is(err, domain.ErrUsageSourceEventConflict) {
+	if err := s.ApplyUsageChunk(ctx, source.ID, 20, now.Add(time.Second), domain.SourceCursorState{ByteOffset: 30, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second)}, []domain.ModelUsageEvent{kindConflict}, nil); !errors.Is(err, domain.ErrUsageSourceEventConflict) {
 		t.Fatalf("measurement kind replay err = %v, want source conflict", err)
 	}
 }
@@ -1200,7 +1200,7 @@ INSERT INTO model_usage_events (
 	replay.BillingProviderSource = domain.UsageBillingProviderObserved
 	if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
-	}, []domain.ModelUsageEvent{replay}); err != nil {
+	}, []domain.ModelUsageEvent{replay}, nil); err != nil {
 		t.Fatalf("legacy replay conflict: %v", err)
 	}
 }
@@ -1215,7 +1215,7 @@ func TestApplyUsageChunkRejectsBlankProviderOnNewEvent(t *testing.T) {
 	event.ProviderID = "  "
 	if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
-	}, []domain.ModelUsageEvent{event}); err == nil {
+	}, []domain.ModelUsageEvent{event}, nil); err == nil {
 		t.Fatal("blank provider event was persisted")
 	}
 	assertUsageSourceOffset(t, s, source.ID, 0)
@@ -1230,7 +1230,7 @@ func TestApplyUsageChunkRejectsConflictsAndPreservesCursor(t *testing.T) {
 
 	if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{ByteOffset: 50, State: domain.UsageSourceActive, UpdatedAt: now}, []domain.ModelUsageEvent{
 		usageEvent("event-1", canonicalUsageTokens(10, 0, 10, 1)),
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("seed event: %v", err)
 	}
 
@@ -1238,7 +1238,7 @@ func TestApplyUsageChunkRejectsConflictsAndPreservesCursor(t *testing.T) {
 	err := s.ApplyUsageChunk(ctx, source.ID, 50, now, domain.SourceCursorState{ByteOffset: 80, State: domain.UsageSourceActive, UpdatedAt: now}, []domain.ModelUsageEvent{
 		usageEvent("event-2", canonicalUsageTokens(4, 0, 4, 1)),
 		conflict,
-	})
+	}, nil)
 	if !errors.Is(err, domain.ErrUsageSourceEventConflict) {
 		t.Fatalf("conflict err = %v, want ErrUsageSourceEventConflict", err)
 	}
@@ -1250,12 +1250,12 @@ func TestApplyUsageChunkRejectsConflictsAndPreservesCursor(t *testing.T) {
 	}
 
 	bad := usageEvent("event-2", canonicalUsageTokens(10, 11, 10, 1))
-	if err := s.ApplyUsageChunk(ctx, source.ID, 50, now, domain.SourceCursorState{ByteOffset: 90, State: domain.UsageSourceActive, UpdatedAt: now}, []domain.ModelUsageEvent{bad}); err == nil {
+	if err := s.ApplyUsageChunk(ctx, source.ID, 50, now, domain.SourceCursorState{ByteOffset: 90, State: domain.UsageSourceActive, UpdatedAt: now}, []domain.ModelUsageEvent{bad}, nil); err == nil {
 		t.Fatal("expected invalid event insert to fail")
 	}
 	assertUsageSourceOffset(t, s, source.ID, 50)
 
-	if err := s.ApplyUsageChunk(ctx, source.ID, 0, now, domain.SourceCursorState{ByteOffset: 60, State: domain.UsageSourceActive, UpdatedAt: now}, nil); !errors.Is(err, domain.ErrUsageSourceOffsetConflict) {
+	if err := s.ApplyUsageChunk(ctx, source.ID, 0, now, domain.SourceCursorState{ByteOffset: 60, State: domain.UsageSourceActive, UpdatedAt: now}, nil, nil); !errors.Is(err, domain.ErrUsageSourceOffsetConflict) {
 		t.Fatalf("offset err = %v, want ErrUsageSourceOffsetConflict", err)
 	}
 	assertUsageSourceOffset(t, s, source.ID, 50)
@@ -1303,13 +1303,13 @@ func TestApplyUsageChunkProviderUsageConflictsRollback(t *testing.T) {
 			source := seedUsageSource(t, s, sess, now)
 			if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
 				ByteOffset: 50, State: domain.UsageSourceActive, UpdatedAt: now,
-			}, []domain.ModelUsageEvent{test.baseEvent("event-1")}); err != nil {
+			}, []domain.ModelUsageEvent{test.baseEvent("event-1")}, nil); err != nil {
 				t.Fatalf("seed provider event: %v", err)
 			}
 
 			err := s.ApplyUsageChunk(ctx, source.ID, 50, now, domain.SourceCursorState{
 				ByteOffset: 80, State: domain.UsageSourceActive, UpdatedAt: now.Add(time.Second),
-			}, []domain.ModelUsageEvent{test.baseEvent("event-2"), test.conflicting("event-1")})
+			}, []domain.ModelUsageEvent{test.baseEvent("event-2"), test.conflicting("event-1")}, nil)
 			if !errors.Is(err, domain.ErrUsageSourceEventConflict) {
 				t.Fatalf("provider conflict err = %v, want ErrUsageSourceEventConflict", err)
 			}
@@ -1367,12 +1367,12 @@ func TestApplyUsageChunkProviderUsageEnrichmentAdvancesCursorWithoutDuplicate(t 
 			base.ProviderUsageJSON = ""
 			if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
 				ByteOffset: 50, State: domain.UsageSourceActive, UpdatedAt: now,
-			}, []domain.ModelUsageEvent{base}); err != nil {
+			}, []domain.ModelUsageEvent{base}, nil); err != nil {
 				t.Fatalf("seed provider event: %v", err)
 			}
 			if err := s.ApplyUsageChunk(ctx, source.ID, 50, now, domain.SourceCursorState{
 				ByteOffset: 80, State: domain.UsageSourceActive, UpdatedAt: now.Add(time.Second),
-			}, []domain.ModelUsageEvent{test.richer()}); err != nil {
+			}, []domain.ModelUsageEvent{test.richer()}, nil); err != nil {
 				t.Fatalf("enrich provider event: %v", err)
 			}
 			assertUsageSourceOffset(t, s, source.ID, 80)
@@ -1564,7 +1564,7 @@ func TestUsageRowsCascadeWhenSeedSessionDeleted(t *testing.T) {
 	source := seedUsageSource(t, s, sess, now)
 	if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{ByteOffset: 10, State: domain.UsageSourceComplete, UpdatedAt: now}, []domain.ModelUsageEvent{
 		usageEvent("event-1", canonicalUsageTokens(1, 0, 1, 1)),
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("apply event: %v", err)
 	}
 
@@ -1614,7 +1614,7 @@ func TestUsageAggregatesMergeProvidersPerModelAndPreserveCostCoverageFacts(t *te
 	}
 	if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceComplete, UpdatedAt: now,
-	}, events); err != nil {
+	}, events, nil); err != nil {
 		t.Fatalf("apply cost events: %v", err)
 	}
 
@@ -1663,7 +1663,7 @@ func TestUsageAggregatesReturnSQLiteIntegerOverflow(t *testing.T) {
 	}, []domain.ModelUsageEvent{
 		usageEvent("overflow-1", canonicalUsageTokens(math.MaxInt64, 0, math.MaxInt64, 0)),
 		usageEvent("overflow-2", canonicalUsageTokens(math.MaxInt64, 0, math.MaxInt64, 0)),
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("apply overflow events: %v", err)
 	}
 	if _, err := s.ListUsageModelAggregates(ctx, sess.ID); err == nil || !strings.Contains(err.Error(), "integer overflow") {
@@ -1695,7 +1695,7 @@ func TestListCompactSessionUsageAggregatesAndFiltersByProject(t *testing.T) {
 	}, []domain.ModelUsageEvent{
 		usageEvent("event-1", canonicalUsageTokens(100, 50, 50, 20)),
 		usageEvent("event-2", canonicalUsageTokens(50, 20, 30, 10)),
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("apply usage events: %v", err)
 	}
 	if _, err := s.MarkUsageSourceState(ctx, source.ID, domain.UsageSourceComplete, domain.UsageErrorArtifactReplaced, nil, now); err != nil {
@@ -1742,7 +1742,7 @@ func TestListCompactSessionUsageSeparatesRetriesFromIntegrityFailures(t *testing
 		UpdatedAt:  now,
 	}, []domain.ModelUsageEvent{
 		usageEvent("transient-event", canonicalUsageTokens(1, 0, 1, 0)),
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("seed transient usage: %v", err)
 	}
 	if _, err := s.MarkUsageSourceState(
@@ -1764,7 +1764,7 @@ func TestListCompactSessionUsageSeparatesRetriesFromIntegrityFailures(t *testing
 		UpdatedAt:  now,
 	}, []domain.ModelUsageEvent{
 		usageEvent("incomplete-event", canonicalUsageTokens(1, 0, 1, 0)),
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("seed incomplete usage: %v", err)
 	}
 	if _, err := s.MarkUsageSourceState(
@@ -1824,7 +1824,7 @@ func TestUsageSessionAggregatesParentChildAndMultipleBindingsExactlyOnce(t *test
 			ByteOffset: 10,
 			State:      domain.UsageSourceComplete,
 			UpdatedAt:  observedAt,
-		}, []domain.ModelUsageEvent{usageEvent(key, canonicalUsageTokens(input, 0, input, output))})
+		}, []domain.ModelUsageEvent{usageEvent(key, canonicalUsageTokens(input, 0, input, output))}, nil)
 		if err != nil {
 			t.Fatalf("apply source %d: %v", source.ID, err)
 		}
@@ -1897,7 +1897,7 @@ func TestKimiUsageEventRoundTrip(t *testing.T) {
 	if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`,
 		UpdatedAt: now,
-	}, []domain.ModelUsageEvent{event}); err != nil {
+	}, []domain.ModelUsageEvent{event}, nil); err != nil {
 		t.Fatalf("apply Kimi usage: %v", err)
 	}
 
@@ -2082,7 +2082,7 @@ func TestApplyUsageChunkRehomesAnOpenDuplicateToTheReplacementSource(t *testing.
 	event := anthropicUsageEvent("replaced-event", 5, 10, 5, 4)
 	mustNoError(t, s.ApplyUsageChunk(ctx, retired.ID, 0, retired.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
-	}, []domain.ModelUsageEvent{event}), "seed unattributed event")
+	}, []domain.ModelUsageEvent{event}, nil), "seed unattributed event")
 
 	replacement, err := s.ReplaceUsageSource(ctx, retired.ID, domain.UsageErrorArtifactReplaced, domain.UsageSourceRecord{
 		BindingID:       retired.BindingID,
@@ -2099,7 +2099,7 @@ func TestApplyUsageChunkRehomesAnOpenDuplicateToTheReplacementSource(t *testing.
 	// The replacement replays a byte-identical logical event.
 	mustNoError(t, s.ApplyUsageChunk(ctx, replacement.ID, 0, replacement.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second),
-	}, []domain.ModelUsageEvent{event}), "replay onto the replacement")
+	}, []domain.ModelUsageEvent{event}, nil), "replay onto the replacement")
 
 	assertHomedTo := func(want int64, why string) {
 		t.Helper()
@@ -2122,7 +2122,7 @@ func TestApplyUsageChunkRehomesAnOpenDuplicateToTheReplacementSource(t *testing.
 	// Idempotent: replaying again neither duplicates the row nor moves it back.
 	mustNoError(t, s.ApplyUsageChunk(ctx, replacement.ID, 10, now.Add(2*time.Second), domain.SourceCursorState{
 		ByteOffset: 20, State: domain.UsageSourceActive, UpdatedAt: now.Add(3 * time.Second),
-	}, []domain.ModelUsageEvent{event}), "replay twice")
+	}, []domain.ModelUsageEvent{event}, nil), "replay twice")
 	assertHomedTo(replacement.ID, "after a repeated replay")
 
 	open, err := s.HasOpenUsageAttribution(ctx, replacement.ID)
@@ -2147,7 +2147,7 @@ func TestApplyUsageChunkRehomesAnInferredDuplicateToTheReplacementSource(t *test
 	event.BillingProviderSource = domain.UsageBillingProviderInferred
 	mustNoError(t, s.ApplyUsageChunk(ctx, retired.ID, 0, retired.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
-	}, []domain.ModelUsageEvent{event}), "seed inferred event")
+	}, []domain.ModelUsageEvent{event}, nil), "seed inferred event")
 
 	replacement, err := s.ReplaceUsageSource(ctx, retired.ID, domain.UsageErrorArtifactReplaced, domain.UsageSourceRecord{
 		BindingID:       retired.BindingID,
@@ -2163,7 +2163,7 @@ func TestApplyUsageChunkRehomesAnInferredDuplicateToTheReplacementSource(t *test
 
 	mustNoError(t, s.ApplyUsageChunk(ctx, replacement.ID, 0, replacement.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second),
-	}, []domain.ModelUsageEvent{event}), "replay onto the replacement")
+	}, []domain.ModelUsageEvent{event}, nil), "replay onto the replacement")
 
 	candidates, err := s.ListLegacyUsageEvents(ctx, replacement.ID)
 	mustNoError(t, err, "list legacy events")
@@ -2201,7 +2201,7 @@ func TestApplyUsageChunkPromotesRehomedInferenceToObservedProvider(t *testing.T)
 	}
 	mustNoError(t, s.ApplyUsageChunk(ctx, retired.ID, 0, retired.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
-	}, []domain.ModelUsageEvent{inferred}), "seed inferred Anthropic event")
+	}, []domain.ModelUsageEvent{inferred}, nil), "seed inferred Anthropic event")
 
 	replacement, err := s.ReplaceUsageSource(ctx, retired.ID, domain.UsageErrorArtifactReplaced, domain.UsageSourceRecord{
 		BindingID:       retired.BindingID,
@@ -2228,7 +2228,7 @@ func TestApplyUsageChunkPromotesRehomedInferenceToObservedProvider(t *testing.T)
 	}
 	mustNoError(t, s.ApplyUsageChunk(ctx, replacement.ID, 0, replacement.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second),
-	}, []domain.ModelUsageEvent{observed}), "promote replayed event to observed Z.AI")
+	}, []domain.ModelUsageEvent{observed}, nil), "promote replayed event to observed Z.AI")
 
 	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db"))
 	mustNoError(t, err, "open raw sqlite")

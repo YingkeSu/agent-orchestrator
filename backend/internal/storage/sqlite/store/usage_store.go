@@ -353,14 +353,16 @@ func (s *Store) MarkUsageSourceFailure(ctx context.Context, id, failureCount int
 	return n > 0, nil
 }
 
-// ApplyUsageChunk atomically writes parsed usage events and advances the source
-// cursor/baselines. The cursor never moves unless all event writes commit.
+// ApplyUsageChunk atomically writes parsed usage events (and their timing
+// facts) and advances the source cursor/baselines. The cursor never moves
+// unless all event writes commit.
 func (s *Store) ApplyUsageChunk(
 	ctx context.Context,
 	sourceID, expectedOffset int64,
 	expectedRevision time.Time,
 	nextState domain.SourceCursorState,
 	events []domain.ModelUsageEvent,
+	timing []domain.UsageEventTiming,
 ) error {
 	if nextState.ParserStateJSON != "" {
 		if err := validateParserStateObject(nextState.ParserStateJSON); err != nil {
@@ -384,6 +386,22 @@ func (s *Store) ApplyUsageChunk(
 		if !source.SourceUpdatedAt.Equal(expectedRevision) ||
 			(source.SourceState == domain.UsageSourceComplete && source.SourceLastErrorCode == domain.UsageErrorArtifactReplaced) {
 			return fmt.Errorf("%w: source %d changed while its chunk was being read", domain.ErrUsageSourceRevisionConflict, sourceID)
+		}
+		timingByKey := make(map[string]domain.UsageEventTiming, len(timing))
+		for _, entry := range timing {
+			timingByKey[entry.SourceEventKey] = entry
+		}
+		appliedTiming := make(map[string]bool, len(timing))
+		upsertTiming := func(eventID int64, entry domain.UsageEventTiming) error {
+			_, err := q.UpsertModelUsageEventTiming(ctx, gen.UpsertModelUsageEventTimingParams{
+				EventID:      eventID,
+				RoundSeq:     entry.RoundSeq,
+				LlmMs:        ptrInt64ToNull(entry.LLMMS),
+				ToolMs:       ptrInt64ToNull(entry.ToolMS),
+				FirstTokenMs: ptrInt64ToNull(entry.FirstTokenMS),
+				CreatedAt:    timeOrNow(nextState.UpdatedAt),
+			})
+			return err
 		}
 		insertedEvent := false
 		for _, ev := range events {
@@ -420,6 +438,15 @@ func (s *Store) ApplyUsageChunk(
 						return err
 					}
 				}
+				// A replacement generation re-derives the same logical event
+				// with (possibly changed) timing facts; refresh the child row
+				// to match the new certified generation.
+				if entry, ok := timingByKey[ev.SourceEventKey]; ok {
+					if err := upsertTiming(existing.ID, entry); err != nil {
+						return err
+					}
+					appliedTiming[ev.SourceEventKey] = true
+				}
 				if promoteAttribution {
 					rows, err := q.PromoteInferredUsageEventToObserved(ctx, gen.PromoteInferredUsageEventToObservedParams{
 						BillingProviderID:         stringOrNull(ev.BillingProviderID),
@@ -455,10 +482,38 @@ func (s *Store) ApplyUsageChunk(
 				}
 				continue
 			}
-			if _, err := q.InsertModelUsageEvent(ctx, usageEventInsertParams(source, ev)); err != nil {
+			eventID, err := q.InsertModelUsageEvent(ctx, usageEventInsertParams(source, ev))
+			if err != nil {
 				return err
 			}
+			if entry, ok := timingByKey[ev.SourceEventKey]; ok {
+				if err := upsertTiming(eventID, entry); err != nil {
+					return err
+				}
+				appliedTiming[ev.SourceEventKey] = true
+			}
 			insertedEvent = true
+		}
+		// Timing facts whose event was committed in an earlier chunk (a tool
+		// elapsed closed by a tool_result that arrived later, or a Codex
+		// first-token closed by a response item) refresh the stored child row.
+		for key, entry := range timingByKey {
+			if appliedTiming[key] {
+				continue
+			}
+			existing, err := q.GetModelUsageEventByKey(ctx, gen.GetModelUsageEventByKeyParams{
+				BindingID:      source.BindingID,
+				SourceEventKey: key,
+			})
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if err := upsertTiming(existing.ID, entry); err != nil {
+				return err
+			}
 		}
 		if err := q.UpdateUsageSourceCursor(ctx, gen.UpdateUsageSourceCursorParams{
 			ID:              sourceID,
@@ -858,6 +913,34 @@ func (s *Store) ListUsageSummaryDimensions(ctx context.Context, from, to *time.T
 		}
 	}
 	return dims, nil
+}
+
+// ListModelUsageEventTiming returns usage events in the optional created_at
+// range with their timing rows LEFT JOINed, newest-first. Events whose timing
+// facts were never certified come back with RoundSeq 0 and nil durations; the
+// request log renders those as the unknown marker, never as zero.
+func (s *Store) ListModelUsageEventTiming(ctx context.Context, from, to *time.Time) ([]domain.UsageEventTimingRow, error) {
+	rows, err := s.qr.ListModelUsageEventTiming(ctx, gen.ListModelUsageEventTimingParams{
+		From: ptrTimeToNullTime(from),
+		To:   ptrTimeToNullTime(to),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list model usage event timing: %w", err)
+	}
+	out := make([]domain.UsageEventTimingRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.UsageEventTimingRow{
+			EventID:        row.EventID,
+			BindingID:      row.BindingID,
+			CreatedAt:      row.CreatedAt.Time,
+			SourceEventKey: row.SourceEventKey,
+			RoundSeq:       row.RoundSeq.Int64,
+			LLMMS:          nullInt64Ptr(row.LlmMs),
+			ToolMS:         nullInt64Ptr(row.ToolMs),
+			FirstTokenMS:   nullInt64Ptr(row.FirstTokenMs),
+		})
+	}
+	return out, nil
 }
 
 func usageBindingFromGen(row gen.UsageBinding) domain.UsageBindingRecord {
