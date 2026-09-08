@@ -1793,5 +1793,22 @@
 	"settings.models.customAgentModelAria": "{{label}} 自定义模型",
 	"session.interfaceSwitchFailed": "无法切换界面",
 	"session.dismissInterfaceSwitchError": "关闭界面切换错误提示",
-	"session.dismissInterfaceSwitchNotice": "关闭"
+	"session.dismissInterfaceSwitchNotice": "关闭",
+	"usage.title": "用量统计",
+	"usage.subtitle": "所有会话的令牌使用量和估算成本。",
+	"usage.range.today": "今天",
+	"usage.range.sevenDays": "7 天",
+	"usage.range.thirtyDays": "30 天",
+	"usage.loading": "正在加载用量…",
+	"usage.loadFailed": "无法加载用量统计。",
+	"usage.totalTokens": "总令牌数",
+	"usage.totalRequests": "总请求数",
+	"usage.totalCost": "总成本",
+	"usage.newInput": "新输入",
+	"usage.cachedInput": "缓存输入",
+	"usage.output": "输出",
+	"usage.totalInput": "总输入",
+	"usage.cacheHitRate": "缓存命中率",
+	"usage.cacheHitRateHint": "缓存 /（缓存 + 新输入）",
+	"usage.emptyRange": "此范围内没有用量。"
 }

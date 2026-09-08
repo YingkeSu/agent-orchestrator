@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -20,6 +21,9 @@ type fakeUsageSummaryService struct {
 	sessionID domain.SessionID
 	items     []domain.CompactSessionUsage
 	detail    domain.SessionUsageSummary
+	global    domain.GlobalUsageSummary
+	from      *time.Time
+	to        *time.Time
 	err       error
 }
 
@@ -31,6 +35,11 @@ func (f *fakeUsageSummaryService) ListCompact(_ context.Context, projectID domai
 func (f *fakeUsageSummaryService) Get(_ context.Context, sessionID domain.SessionID) (domain.SessionUsageSummary, error) {
 	f.sessionID = sessionID
 	return f.detail, f.err
+}
+
+func (f *fakeUsageSummaryService) Global(_ context.Context, from, to *time.Time) (domain.GlobalUsageSummary, error) {
+	f.from, f.to = from, to
+	return f.global, f.err
 }
 
 func newUsageTestServer(t *testing.T, svc *fakeUsageSummaryService) *httptest.Server {
@@ -194,5 +203,98 @@ func TestUsageAPIShowsDetailedEstimatedCostAndProviderAttribution(t *testing.T) 
 		got.Harnesses[0].Models[0].Totals.EstimatedCost.Coverage != "complete" ||
 		got.Harnesses[0].Models[0].Totals.EstimatedCost.ProviderAttribution != "observed" {
 		t.Fatalf("response = %+v", got)
+	}
+}
+
+func TestUsageAPIReturnsGlobalSummary(t *testing.T) {
+	input := int64(1100)
+	cachedInput := int64(400)
+	uncachedInput := int64(700)
+	output := int64(200)
+	processed := int64(1300)
+	rate := 400.0 / 1100.0
+	svc := &fakeUsageSummaryService{global: domain.GlobalUsageSummary{
+		RequestCount: 2,
+		CacheHitRate: &rate,
+		Totals: domain.UsageMetricTotals{
+			InputTokens: &input, CachedInputTokens: &cachedInput, UncachedInputTokens: &uncachedInput,
+			OutputTokens: &output, ProcessedTokens: &processed,
+			EstimatedCost: &domain.EstimatedCost{
+				TotalNanos: 300, Coverage: domain.EstimatedCostCoverageComplete,
+				ProviderAttribution: domain.EstimatedCostProviderAttributionObserved,
+			},
+		},
+	}}
+	srv := newUsageTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/summary?from=2026-09-01T00:00:00Z&to=2026-09-08T00:00:00Z", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	if svc.from == nil || svc.from.Format(time.RFC3339) != "2026-09-01T00:00:00Z" ||
+		svc.to == nil || svc.to.Format(time.RFC3339) != "2026-09-08T00:00:00Z" {
+		t.Fatalf("range = %v .. %v", svc.from, svc.to)
+	}
+	var got struct {
+		RequestCount int64    `json:"requestCount"`
+		CacheHitRate *float64 `json:"cacheHitRate"`
+		Totals       struct {
+			InputTokens         *int64 `json:"inputTokens"`
+			CachedInputTokens   *int64 `json:"cachedInputTokens"`
+			UncachedInputTokens *int64 `json:"uncachedInputTokens"`
+			OutputTokens        *int64 `json:"outputTokens"`
+			ProcessedTokens     *int64 `json:"processedTokens"`
+			EstimatedCost       struct {
+				TotalNanos          int64  `json:"totalNanos"`
+				Coverage            string `json:"coverage"`
+				ProviderAttribution string `json:"providerAttribution"`
+			} `json:"estimatedCost"`
+		} `json:"totals"`
+	}
+	mustJSON(t, body, &got)
+	if got.RequestCount != 2 || got.CacheHitRate == nil || *got.CacheHitRate != 400.0/1100.0 {
+		t.Fatalf("summary = %+v", got)
+	}
+	if got.Totals.InputTokens == nil || *got.Totals.InputTokens != 1100 ||
+		got.Totals.CachedInputTokens == nil || *got.Totals.CachedInputTokens != 400 ||
+		got.Totals.UncachedInputTokens == nil || *got.Totals.UncachedInputTokens != 700 ||
+		got.Totals.OutputTokens == nil || *got.Totals.OutputTokens != 200 ||
+		got.Totals.ProcessedTokens == nil || *got.Totals.ProcessedTokens != 1300 ||
+		got.Totals.EstimatedCost.TotalNanos != 300 ||
+		got.Totals.EstimatedCost.Coverage != "complete" ||
+		got.Totals.EstimatedCost.ProviderAttribution != "observed" {
+		t.Fatalf("totals = %+v", got.Totals)
+	}
+}
+
+func TestUsageSummaryAPIReturnsNullCacheHitRateWhenUnknown(t *testing.T) {
+	svc := &fakeUsageSummaryService{global: domain.GlobalUsageSummary{RequestCount: 1}}
+	srv := newUsageTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/summary", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	var got struct {
+		CacheHitRate json.RawMessage `json:"cacheHitRate"`
+	}
+	mustJSON(t, body, &got)
+	if string(got.CacheHitRate) != "null" {
+		t.Fatalf("cacheHitRate = %s, want explicit null", got.CacheHitRate)
+	}
+}
+
+func TestUsageSummaryAPIRejectsMalformedRange(t *testing.T) {
+	svc := &fakeUsageSummaryService{}
+	srv := newUsageTestServer(t, svc)
+
+	for _, path := range []string{
+		"/api/v1/usage/summary?from=not-a-time",
+		"/api/v1/usage/summary?to=2026-13-99T00:00:00Z",
+	} {
+		_, status, _ := doRequest(t, srv, http.MethodGet, path, "")
+		if status != http.StatusBadRequest {
+			t.Fatalf("status for %q = %d, want 400", path, status)
+		}
 	}
 }

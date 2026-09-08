@@ -367,6 +367,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUsageModelResponse":               "UsageModelResponse",
 	"ControllersUsageHarnessResponse":             "UsageHarnessResponse",
 	"ControllersSessionUsageResponse":             "SessionUsageResponse",
+	"ControllersUsageSummaryQuery":                "UsageSummaryQuery",
+	"ControllersUsageSummaryResponse":             "UsageSummaryResponse",
 	// httpd/controllers — standalone shell terminal wire envelopes
 	"ControllersShellTerminalHandleIDParam":            "ShellTerminalHandleIDParam",
 	"ControllersOpenShellTerminalRequest":              "OpenShellTerminalRequest",
@@ -703,6 +705,17 @@ func usageOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.SessionUsageResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/summary", id: "getUsageSummary", tag: "usage",
+			summary:    "Get global cross-session usage summary over an optional time range",
+			pathParams: []any{controllers.UsageSummaryQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageSummaryResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},

@@ -354,6 +354,24 @@ type CompactSessionUsage struct {
 	EstimatedCost   *EstimatedCost
 }
 
+// GlobalUsageAggregate is the raw cross-session usage aggregate read from
+// storage before the service applies coverage rules. It mirrors the per-model
+// aggregate over every session in the optional time range.
+type GlobalUsageAggregate struct {
+	EventCount int64
+	Tokens     UsageTokenMetrics
+	Cost       UsageCostAggregate
+}
+
+// GlobalUsageSummary is the cross-session usage read model for the usage
+// statistics dashboard. RequestCount counts usage events (token-event
+// granularity); true request-level semantics arrive with the timing pipeline.
+type GlobalUsageSummary struct {
+	Totals       UsageMetricTotals
+	RequestCount int64
+	CacheHitRate *float64
+}
+
 // UsageMetricTotals is the aggregate metric block used by session, harness,
 // and model summaries.
 type UsageMetricTotals struct {

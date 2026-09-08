@@ -1835,5 +1835,22 @@
 	"settings.models.customAgentModelAria": "Modelo personalizado de {{label}}",
 	"session.interfaceSwitchFailed": "Não foi possível alternar a interface",
 	"session.dismissInterfaceSwitchError": "Dispensar erro de troca de interface",
-	"session.dismissInterfaceSwitchNotice": "Dispensar"
+	"session.dismissInterfaceSwitchNotice": "Dispensar",
+	"usage.title": "Estatísticas de uso",
+	"usage.subtitle": "Uso de tokens e custo estimado em todas as sessões.",
+	"usage.range.today": "Hoje",
+	"usage.range.sevenDays": "7 dias",
+	"usage.range.thirtyDays": "30 dias",
+	"usage.loading": "Carregando uso…",
+	"usage.loadFailed": "Não foi possível carregar as estatísticas de uso.",
+	"usage.totalTokens": "Total de tokens",
+	"usage.totalRequests": "Total de solicitações",
+	"usage.totalCost": "Custo total",
+	"usage.newInput": "Entrada nova",
+	"usage.cachedInput": "Entrada em cache",
+	"usage.output": "Saída",
+	"usage.totalInput": "Entrada total",
+	"usage.cacheHitRate": "Taxa de acerto do cache",
+	"usage.cacheHitRateHint": "Em cache / (em cache + nova)",
+	"usage.emptyRange": "Nenhum uso neste intervalo."
 }

@@ -1401,6 +1401,24 @@ type SessionUsageResponse struct {
 	Harnesses  []UsageHarnessResponse `json:"harnesses"`
 }
 
+// UsageSummaryQuery is the query string accepted by GET /api/v1/usage/summary.
+// from/to bound the created_at range (inclusive, RFC 3339); omitting either
+// leaves that side unbounded.
+type UsageSummaryQuery struct {
+	From string `query:"from,omitempty" description:"Inclusive lower created_at bound (RFC 3339)." format:"date-time"`
+	To   string `query:"to,omitempty" description:"Inclusive upper created_at bound (RFC 3339)." format:"date-time"`
+}
+
+// UsageSummaryResponse is the global cross-session usage summary. requestCount
+// counts usage events (token-event granularity); true request-level semantics
+// arrive with the timing pipeline. cacheHitRate is cached input divided by
+// cached plus uncached input, null when either component is unknown.
+type UsageSummaryResponse struct {
+	Totals       UsageTotalsResponse `json:"totals"`
+	RequestCount int64               `json:"requestCount" minimum:"0" description:"Count of usage events in the range (token-event granularity)."`
+	CacheHitRate *float64            `json:"cacheHitRate" description:"Cached input / (cached + uncached input). Null when either component is unknown."`
+}
+
 // SystemRequirementsResponse is the body of GET /api/v1/system/requirements.
 type SystemRequirementsResponse = systemcheck.Report
 

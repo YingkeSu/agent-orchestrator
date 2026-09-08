@@ -23,6 +23,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import {
 	AlertTriangle,
+	BarChart3,
 	ChevronRight,
 	Download,
 	Folder,
@@ -357,6 +358,7 @@ function useSelection() {
 		select: (state) => state.location.pathname,
 	});
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
+	const goUsage = useCallback(() => void navigate({ to: "/usage" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
 	const goConnectMobile = useCallback(() => openGlobalSettings("mobile"), [openGlobalSettings]);
 	const goSettings = useCallback((projectId: string) => openProjectSettings(projectId), [openProjectSettings]);
@@ -377,6 +379,7 @@ function useSelection() {
 		activeProjectId: params.projectId,
 		activeSessionId: params.sessionId,
 		goHome,
+		goUsage,
 		// Settings is a modal — open it in place so the current page (session
 		// terminal, board, etc.) stays underneath.
 		goGlobalSettings,
@@ -384,7 +387,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, params.projectId, params.sessionId, pathname]);
+	}), [goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goUsage, params.projectId, params.sessionId, pathname]);
 }
 
 // Colour tracks the session's board section, preserving SCM state while the
@@ -841,6 +844,19 @@ export function Sidebar({
 					<CloudSignInRow tabIndex={isCollapsed ? -1 : 0} />
 					<CloudAccountRow tabIndex={isCollapsed ? -1 : 0} />
 					<button
+						aria-label={t("usage.title")}
+						className={cn(
+							NAV_ROW_CLASS,
+							"flex h-9 w-full items-center text-left [&_svg]:size-icon-md [&_svg]:shrink-0",
+						)}
+						onClick={() => selection.goUsage()}
+						tabIndex={isCollapsed ? -1 : 0}
+						type="button"
+					>
+						<BarChart3 aria-hidden="true" />
+						<span className="tracking-tight">{t("usage.title")}</span>
+					</button>
+					<button
 						aria-label={t("settings.connectMobile")}
 						className={cn(
 							NAV_ROW_CLASS,
@@ -879,6 +895,20 @@ export function Sidebar({
 					/>
 					<CloudSignInRailButton tabIndex={isCollapsed ? 0 : -1} />
 					<CloudAccountRailButton tabIndex={isCollapsed ? 0 : -1} />
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								aria-label={t("usage.title")}
+								className="grid size-control-board place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground [&_svg]:size-icon-base"
+								onClick={() => selection.goUsage()}
+								tabIndex={isCollapsed ? 0 : -1}
+								type="button"
+							>
+								<BarChart3 aria-hidden="true" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent side="right">{t("usage.title")}</TooltipContent>
+					</Tooltip>
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<button
