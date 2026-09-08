@@ -2420,6 +2420,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/trend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a time-bucketed usage trend over a required created_at range */
+        get: operations["getUsageTrend"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4395,6 +4412,30 @@ export interface components {
             processedTokens: null | number;
             /** @description Input not read from an existing provider cache. Includes cache writes. */
             uncachedInputTokens: null | number;
+        };
+        UsageTrendBucketResponse: {
+            /** Format: date-time */
+            bucketStart: string;
+            /** @description Input read from an existing provider cache. Null when not fully known. */
+            cachedInputTokens: null | number;
+            /** @description Durable estimated cost in nano-USD. Null when the bucket has no known lower bound. */
+            costNanos: null | number;
+            /** @description Total input, including cached and uncached input. Null when not fully known. */
+            inputTokens: null | number;
+            /** @description Total output. Null when not fully known. */
+            outputTokens: null | number;
+            /**
+             * Format: int64
+             * @description Count of usage events in the bucket (token-event granularity).
+             */
+            requestCount: number;
+            /** @description Input not read from an existing provider cache; includes cache writes. Null when not fully known. */
+            uncachedInputTokens: null | number;
+        };
+        UsageTrendResponse: {
+            /** @enum {string} */
+            bucketSize: "hour" | "day";
+            buckets: components["schemas"]["UsageTrendBucketResponse"][];
         };
         WorkspaceCommitSummary: {
             author: string;
@@ -13148,6 +13189,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsageSummaryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageTrend: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower created_at bound (RFC 3339). Required. */
+                from?: string;
+                /** @description Inclusive upper created_at bound (RFC 3339). Required. */
+                to?: string;
+                /** @description Bucket width. Defaults to hour; clamped to day when the range spans more than 31 days. */
+                bucket?: "hour" | "day";
+                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). */
+                source?: string;
+                /** @description Optional exact model id filter. */
+                model?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageTrendResponse"];
                 };
             };
             /** @description Bad Request */

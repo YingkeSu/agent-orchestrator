@@ -1843,7 +1843,7 @@
 	"usage.sourceKind.claudeSubagent": "Claude 하위 에이전트",
 	"usage.sourceKind.codexRollout": "Codex",
 	"usage.sourceKind.kimiWire": "Kimi",
-	"usage.tab.models": "모델 통계",
+"usage.tab.models": "모델 통계",
 	"usage.tab.providers": "제공자 통계",
 	"usage.unattributed": "미귀속",
 	"usage.log.title": "요청 로그",
@@ -1863,6 +1863,7 @@
 	"usage.log.source.claude_main": "Claude 메인",
 	"usage.log.source.claude_subagent": "Claude 서브에이전트",
 	"usage.log.source.codex_rollout": "Codex 롤아웃",
-	"usage.log.source.kimi_wire": "Kimi 와이어"
-
+	"usage.log.source.kimi_wire": "Kimi 와이어",
+"usage.trendTitle": "사용 추세",
+	"usage.trendCost": "비용"
 }

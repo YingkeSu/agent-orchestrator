@@ -11,6 +11,8 @@ import { RequestLogTable } from "./RequestLogTable";
 import { useUsageSummary } from "../hooks/useUsageSummary";
 import { useUsageModelStats, useUsageProviderStats } from "../hooks/useUsageAggregates";
 import { UsageAggregateTable, type UsageAggregateRow } from "./UsageAggregateTable";
+import { useUsageTrend, type UsageTrendBucketSize } from "../hooks/useUsageTrend";
+import { UsageTrendChart } from "./UsageTrendChart";
 import type { MessageKey } from "../i18n/messages";
 import { formatCostNanos } from "../lib/format-cost";
 import { formatTokenCount } from "../lib/format-token-count";
@@ -49,6 +51,12 @@ const SOURCE_PROVIDER: Record<string, string> = {
 function sourceLabel(t: (key: MessageKey) => string, kind: string): string {
 	const key = SOURCE_LABEL_KEY[kind];
 	return key ? t(key) : kind;
+}
+
+// The "today" preset renders at hour granularity; longer presets use day
+// buckets so the chart stays readable.
+function bucketSizeFor(preset: RangePreset): UsageTrendBucketSize {
+	return preset === "today" ? "hour" : "day";
 }
 
 function rangeFor(preset: RangePreset): { from?: string; to?: string } {
@@ -111,6 +119,8 @@ export function UsageStatisticsView() {
 		() => sortByCostDesc((providerStats.data ?? []).map(toProviderRow)),
 		[providerStats.data],
 	);
+	const bucketSize = bucketSizeFor(preset);
+	const trend = useUsageTrend(range.from ?? "", range.to ?? "", bucketSize, source || undefined, model || undefined);
 
 	const totals = data?.totals;
 	const totalTokens = totals?.processedTokens ?? 0;
@@ -286,6 +296,26 @@ export function UsageStatisticsView() {
 										}}
 									/>
 								</div>
+							</CardContent>
+						</Card>
+
+						<Card size="sm">
+							<CardHeader>
+								<CardTitle className="text-sm font-medium text-muted-foreground">
+									{t("usage.trendTitle")}
+								</CardTitle>
+							</CardHeader>
+							<CardContent>
+								{trend.isLoading ? (
+									<div className="flex items-center gap-2 text-sm text-muted-foreground">
+										<span className="size-4 animate-spin rounded-full border-2 border-border-strong border-t-accent" />
+										{t("usage.loading")}
+									</div>
+								) : trend.isError || !trend.data ? (
+									<p className="text-sm text-muted-foreground">{t("usage.loadFailed")}</p>
+								) : (
+									<UsageTrendChart buckets={trend.data.buckets} bucketSize={trend.data.bucketSize} />
+								)}
 							</CardContent>
 						</Card>
 
