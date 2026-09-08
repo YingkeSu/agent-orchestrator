@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -15,6 +16,7 @@ type usageSummaryStore interface {
 	ListCompactSessionUsageAggregates(context.Context, domain.ProjectID) ([]domain.CompactSessionUsageAggregate, error)
 	ListUsageModelAggregates(context.Context, domain.SessionID) ([]domain.UsageModelAggregate, error)
 	GetUsageSessionIncomplete(context.Context, domain.SessionID) (bool, error)
+	AggregateUsageSummary(context.Context, *time.Time, *time.Time) (domain.GlobalUsageAggregate, error)
 }
 
 // SummaryReader derives token and estimated-cost summaries from normalized
@@ -85,6 +87,46 @@ func (r *SummaryReader) Get(ctx context.Context, sessionID domain.SessionID) (do
 	return domain.SessionUsageSummary{
 		SessionID: sessionID, Incomplete: incomplete, Totals: totals, Harnesses: harnesses,
 	}, nil
+}
+
+// Global returns the cross-session usage summary over an optional created_at
+// range. Nil bounds mean unbounded. RequestCount is the count of usage events
+// (token-event granularity); true request-level semantics arrive with the
+// timing pipeline. CacheHitRate is cached input divided by cached plus
+// uncached input, or nil when either component is unknown.
+func (r *SummaryReader) Global(ctx context.Context, from, to *time.Time) (domain.GlobalUsageSummary, error) {
+	if r == nil || r.store == nil {
+		return domain.GlobalUsageSummary{}, fmt.Errorf("usage summary store is unavailable")
+	}
+	agg, err := r.store.AggregateUsageSummary(ctx, from, to)
+	if err != nil {
+		return domain.GlobalUsageSummary{}, err
+	}
+	totals, err := usageTotals([]domain.UsageModelAggregate{
+		{Tokens: agg.Tokens, Cost: agg.Cost},
+	})
+	if err != nil {
+		return domain.GlobalUsageSummary{}, err
+	}
+	return domain.GlobalUsageSummary{
+		Totals:       totals,
+		RequestCount: agg.EventCount,
+		CacheHitRate: cacheHitRate(agg.Tokens),
+	}, nil
+}
+
+// cacheHitRate returns cached input divided by cached plus uncached input. Both
+// inputs must be known for a rate to exist; otherwise it is nil.
+func cacheHitRate(tokens domain.UsageTokenMetrics) *float64 {
+	if tokens.CachedInputTokens == nil || tokens.UncachedInputTokens == nil {
+		return nil
+	}
+	denominator := *tokens.CachedInputTokens + *tokens.UncachedInputTokens
+	if denominator == 0 {
+		return nil
+	}
+	rate := float64(*tokens.CachedInputTokens) / float64(denominator)
+	return &rate
 }
 
 func usageTotals(models []domain.UsageModelAggregate) (domain.UsageMetricTotals, error) {

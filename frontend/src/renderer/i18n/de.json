@@ -1811,5 +1811,22 @@
 	"settings.models.customAgentModelAria": "Benutzerdefiniertes Modell für {{label}}",
 	"session.interfaceSwitchFailed": "Oberfläche konnte nicht gewechselt werden",
 	"session.dismissInterfaceSwitchError": "Fehler beim Oberflächenwechsel schließen",
-	"session.dismissInterfaceSwitchNotice": "Schließen"
+	"session.dismissInterfaceSwitchNotice": "Schließen",
+	"usage.title": "Nutzungsstatistik",
+	"usage.subtitle": "Tokenverbrauch und geschätzte Kosten über alle Sitzungen.",
+	"usage.range.today": "Heute",
+	"usage.range.sevenDays": "7 Tage",
+	"usage.range.thirtyDays": "30 Tage",
+	"usage.loading": "Nutzung wird geladen…",
+	"usage.loadFailed": "Nutzungsstatistik konnte nicht geladen werden.",
+	"usage.totalTokens": "Gesamte Tokens",
+	"usage.totalRequests": "Gesamte Anfragen",
+	"usage.totalCost": "Gesamtkosten",
+	"usage.newInput": "Neue Eingabe",
+	"usage.cachedInput": "Zwischengespeicherte Eingabe",
+	"usage.output": "Ausgabe",
+	"usage.totalInput": "Gesamte Eingabe",
+	"usage.cacheHitRate": "Cache-Trefferquote",
+	"usage.cacheHitRateHint": "Zwischengespeichert / (zwischengespeichert + neu)",
+	"usage.emptyRange": "Keine Nutzung in diesem Zeitraum."
 }

@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -15,6 +16,7 @@ import (
 type UsageSummaryService interface {
 	ListCompact(context.Context, domain.ProjectID) ([]domain.CompactSessionUsage, error)
 	Get(context.Context, domain.SessionID) (domain.SessionUsageSummary, error)
+	Global(context.Context, *time.Time, *time.Time) (domain.GlobalUsageSummary, error)
 }
 
 // UsageController owns compact dashboard usage routes.
@@ -26,6 +28,51 @@ type UsageController struct {
 func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/{sessionId}", c.getSession)
+	r.Get("/usage/summary", c.getSummary)
+}
+
+// getSummary returns the global cross-session usage summary over an optional
+// created_at range. from/to are RFC 3339 timestamps; omitting either leaves
+// that side unbounded.
+func (c *UsageController) getSummary(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/summary")
+		return
+	}
+	query := r.URL.Query()
+	from, err := parseOptionalTime(query.Get("from"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_FROM", "from must be an RFC 3339 timestamp", nil)
+		return
+	}
+	to, err := parseOptionalTime(query.Get("to"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_TO", "to must be an RFC 3339 timestamp", nil)
+		return
+	}
+	summary, err := c.Svc.Global(r.Context(), from, to)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, UsageSummaryResponse{
+		Totals:       usageTotalsResponse(summary.Totals),
+		RequestCount: summary.RequestCount,
+		CacheHitRate: summary.CacheHitRate,
+	})
+}
+
+// parseOptionalTime parses an RFC 3339 timestamp, returning nil for an empty
+// string and an error for a malformed value.
+func parseOptionalTime(raw string) (*time.Time, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
 func (c *UsageController) listSessions(w http.ResponseWriter, r *http.Request) {

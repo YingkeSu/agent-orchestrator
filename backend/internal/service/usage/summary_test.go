@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -15,7 +16,10 @@ type usageSummaryStoreStub struct {
 	found      bool
 	incomplete bool
 	models     []domain.UsageModelAggregate
-	calls      [4]int
+	global     domain.GlobalUsageAggregate
+	globalFrom *time.Time
+	globalTo   *time.Time
+	calls      [5]int
 }
 
 func (s *usageSummaryStoreStub) ListCompactSessionUsageAggregates(_ context.Context, id domain.ProjectID) ([]domain.CompactSessionUsageAggregate, error) {
@@ -33,6 +37,11 @@ func (s *usageSummaryStoreStub) ListUsageModelAggregates(context.Context, domain
 func (s *usageSummaryStoreStub) GetUsageSessionIncomplete(context.Context, domain.SessionID) (bool, error) {
 	s.calls[3]++
 	return s.incomplete, nil
+}
+func (s *usageSummaryStoreStub) AggregateUsageSummary(_ context.Context, from, to *time.Time) (domain.GlobalUsageAggregate, error) {
+	s.calls[4]++
+	s.globalFrom, s.globalTo = from, to
+	return s.global, nil
 }
 
 func TestSummaryReaderListCompactUsesOneBatchRead(t *testing.T) {
@@ -155,7 +164,7 @@ func TestSummaryReaderGetPreservesStrongestPartialLowerBoundWithoutDoubleCountin
 		got.Harnesses[1].Totals.ProcessedTokens == nil || *got.Harnesses[1].Totals.ProcessedTokens != 125 {
 		t.Fatalf("processed totals by scope = %+v", got.Harnesses)
 	}
-	if store.calls != [4]int{0, 1, 1, 1} {
+	if store.calls != [5]int{0, 1, 1, 1, 0} {
 		t.Fatalf("store calls = %v", store.calls)
 	}
 }
@@ -242,6 +251,84 @@ func TestSummaryReaderRejectsAggregateOverflow(t *testing.T) {
 		}
 	})
 }
+
+func TestSummaryReaderGlobalHappyPath(t *testing.T) {
+	from, to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	store := &usageSummaryStoreStub{global: domain.GlobalUsageAggregate{
+		EventCount: 2,
+		Tokens:     testUsageMetrics(1100, 400, 700, 200),
+		Cost:       completeCostAggregate(2, 300, 100, 40, 160),
+	}}
+
+	got, err := NewSummaryReader(store).Global(context.Background(), &from, &to)
+	mustNoError(t, err)
+	if store.globalFrom == nil || !store.globalFrom.Equal(from) || store.globalTo == nil || !store.globalTo.Equal(to) {
+		t.Fatalf("range bounds = %v .. %v, want %v .. %v", store.globalFrom, store.globalTo, from, to)
+	}
+	if got.RequestCount != 2 {
+		t.Fatalf("request count = %d, want 2", got.RequestCount)
+	}
+	if got.Totals.InputTokens == nil || *got.Totals.InputTokens != 1100 ||
+		got.Totals.CachedInputTokens == nil || *got.Totals.CachedInputTokens != 400 ||
+		got.Totals.UncachedInputTokens == nil || *got.Totals.UncachedInputTokens != 700 ||
+		got.Totals.OutputTokens == nil || *got.Totals.OutputTokens != 200 ||
+		got.Totals.ProcessedTokens == nil || *got.Totals.ProcessedTokens != 1300 {
+		t.Fatalf("global totals = %+v", got.Totals)
+	}
+	if got.Totals.EstimatedCost == nil || got.Totals.EstimatedCost.TotalNanos != 300 ||
+		got.Totals.EstimatedCost.Coverage != domain.EstimatedCostCoverageComplete {
+		t.Fatalf("global cost = %+v", got.Totals.EstimatedCost)
+	}
+	if got.CacheHitRate == nil || *got.CacheHitRate != 400.0/1100.0 {
+		t.Fatalf("cache hit rate = %v, want 400/1100", got.CacheHitRate)
+	}
+}
+
+func TestSummaryReaderGlobalExcludesUnknownMetrics(t *testing.T) {
+	store := &usageSummaryStoreStub{global: domain.GlobalUsageAggregate{
+		EventCount: 1,
+		// Cached input is unknown: the summed uncached/cached split is dropped.
+		Tokens: domain.UsageTokenMetrics{
+			InputTokens:         int64Ptr(100),
+			OutputTokens:        int64Ptr(50),
+			CachedInputTokens:   nil,
+			UncachedInputTokens: int64Ptr(100),
+		},
+		Cost: completeCostAggregate(1, 0, 0, 0, 0),
+	}}
+
+	got, err := NewSummaryReader(store).Global(context.Background(), nil, nil)
+	mustNoError(t, err)
+	if got.Totals.CachedInputTokens != nil {
+		t.Fatalf("unknown cached input = %v, want nil", got.Totals.CachedInputTokens)
+	}
+	if got.CacheHitRate != nil {
+		t.Fatalf("cache hit rate with unknown component = %v, want nil", got.CacheHitRate)
+	}
+	// Known components still aggregate.
+	if got.Totals.InputTokens == nil || *got.Totals.InputTokens != 100 ||
+		got.Totals.OutputTokens == nil || *got.Totals.OutputTokens != 50 {
+		t.Fatalf("known totals = %+v", got.Totals)
+	}
+}
+
+func TestSummaryReaderGlobalEmptyRange(t *testing.T) {
+	store := &usageSummaryStoreStub{global: domain.GlobalUsageAggregate{EventCount: 0}}
+	got, err := NewSummaryReader(store).Global(context.Background(), nil, nil)
+	mustNoError(t, err)
+	if got.RequestCount != 0 {
+		t.Fatalf("request count = %d, want 0", got.RequestCount)
+	}
+	if got.Totals.InputTokens != nil || got.Totals.OutputTokens != nil ||
+		got.Totals.ProcessedTokens != nil || got.Totals.EstimatedCost != nil {
+		t.Fatalf("empty range totals = %+v, want all nil", got.Totals)
+	}
+	if got.CacheHitRate != nil {
+		t.Fatalf("empty range cache hit rate = %v, want nil", got.CacheHitRate)
+	}
+}
+
+func int64Ptr(v int64) *int64 { return &v }
 
 func testUsageMetrics(input, cachedInput, uncachedInput, output int64) domain.UsageTokenMetrics {
 	return domain.UsageTokenMetrics{

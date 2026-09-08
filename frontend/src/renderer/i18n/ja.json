@@ -1811,5 +1811,22 @@
 	"settings.models.customAgentModelAria": "{{label}} のカスタムモデル",
 	"session.interfaceSwitchFailed": "インターフェースを切り替えられませんでした",
 	"session.dismissInterfaceSwitchError": "インターフェース切り替えエラーを閉じる",
-	"session.dismissInterfaceSwitchNotice": "閉じる"
+	"session.dismissInterfaceSwitchNotice": "閉じる",
+	"usage.title": "利用統計",
+	"usage.subtitle": "すべてのセッションのトークン使用量と推定コスト。",
+	"usage.range.today": "今日",
+	"usage.range.sevenDays": "7日間",
+	"usage.range.thirtyDays": "30日間",
+	"usage.loading": "利用状況を読み込み中…",
+	"usage.loadFailed": "利用統計を読み込めませんでした。",
+	"usage.totalTokens": "合計トークン",
+	"usage.totalRequests": "合計リクエスト",
+	"usage.totalCost": "合計コスト",
+	"usage.newInput": "新しい入力",
+	"usage.cachedInput": "キャッシュ済み入力",
+	"usage.output": "出力",
+	"usage.totalInput": "合計入力",
+	"usage.cacheHitRate": "キャッシュヒット率",
+	"usage.cacheHitRateHint": "キャッシュ済み /（キャッシュ済み + 新規）",
+	"usage.emptyRange": "この期間の利用はありません。"
 }

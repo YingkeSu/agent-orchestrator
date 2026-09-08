@@ -512,6 +512,72 @@ func TestApplyUsageChunkAtomicReplayAndTokenAggregates(t *testing.T) {
 	}
 }
 
+func TestAggregateUsageSummaryAggregatesAcrossSessionsAndRange(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	day1 := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	day2 := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+
+	codexSession := seedUsageSession(t, s, domain.HarnessCodex)
+	codexSource := seedUsageSource(t, s, codexSession, day1)
+	claudeSession := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	claudeSource := seedUsageSource(t, s, claudeSession, day2)
+
+	// Day 1: a codex event with all metrics known and a full price.
+	codexEvent := usageEvent("codex-day1", canonicalUsageTokens(100, 40, 60, 30))
+	codexEvent.BillingProviderID = "openai"
+	codexEvent.BillingProviderSource = domain.UsageBillingProviderObserved
+	codexEvent.CreatedAt = day1
+	codexInputCost, codexCachedCost, codexOutputCost, codexTotal := int64(100), int64(20), int64(30), int64(150)
+	codexEvent.Costs = domain.UsageEventCosts{
+		InputCostNanos: &codexInputCost, CachedInputCostNanos: &codexCachedCost,
+		OutputCostNanos: &codexOutputCost, EstimatedCostNanos: &codexTotal, PricingVersion: "catalog-v1",
+	}
+	mustNoError(t, s.ApplyUsageChunk(ctx, codexSource.ID, 0, codexSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: day1,
+	}, []domain.ModelUsageEvent{codexEvent}))
+
+	// Day 5: a claude event with known cached/uncached split.
+	claudeEvent := anthropicUsageEvent("claude-day5", 20, 10, 40, 15)
+	claudeEvent.CreatedAt = day2
+	mustNoError(t, s.ApplyUsageChunk(ctx, claudeSource.ID, 0, claudeSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: day2,
+	}, []domain.ModelUsageEvent{claudeEvent}))
+
+	// Unbounded: both events aggregate.
+	all, err := s.AggregateUsageSummary(ctx, nil, nil)
+	mustNoError(t, err, "aggregate all")
+	if all.EventCount != 2 {
+		t.Fatalf("event count = %d, want 2", all.EventCount)
+	}
+	if usageTokenValue(all.Tokens.InputTokens) != 170 ||
+		usageTokenValue(all.Tokens.CachedInputTokens) != 80 ||
+		usageTokenValue(all.Tokens.UncachedInputTokens) != 90 ||
+		usageTokenValue(all.Tokens.OutputTokens) != 45 {
+		t.Fatalf("global tokens = %+v", all.Tokens)
+	}
+	if all.Cost.PricedEventCount != 1 || all.Cost.PricedTotalNanos != 150 {
+		t.Fatalf("global cost = %+v", all.Cost)
+	}
+
+	// Range on day 1 only: just the codex event.
+	day1End := day1.Add(24 * time.Hour)
+	day1Only, err := s.AggregateUsageSummary(ctx, &day1, &day1End)
+	mustNoError(t, err, "aggregate day1")
+	if day1Only.EventCount != 1 || usageTokenValue(day1Only.Tokens.InputTokens) != 100 {
+		t.Fatalf("day1 aggregate = %+v", day1Only)
+	}
+
+	// Empty range after both events.
+	after := day2.Add(48 * time.Hour)
+	empty, err := s.AggregateUsageSummary(ctx, &after, &after)
+	mustNoError(t, err, "aggregate empty range")
+	if empty.EventCount != 0 {
+		t.Fatalf("empty range event count = %d, want 0", empty.EventCount)
+	}
+}
+
 func TestApplyUsageChunkPersistsProviderSplitsAndPassiveCosts(t *testing.T) {
 	dataDir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dataDir)

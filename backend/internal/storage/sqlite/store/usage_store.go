@@ -796,6 +796,37 @@ func (s *Store) ListCompactSessionUsageAggregates(ctx context.Context, projectID
 	return out, nil
 }
 
+// AggregateUsageSummary returns the global cross-session usage aggregate over an
+// optional created_at range. A nil bound omits that side of the range.
+func (s *Store) AggregateUsageSummary(ctx context.Context, from, to *time.Time) (domain.GlobalUsageAggregate, error) {
+	row, err := s.qr.AggregateUsageSummary(ctx, gen.AggregateUsageSummaryParams{
+		From: ptrTimeToNullTime(from),
+		To:   ptrTimeToNullTime(to),
+	})
+	if err != nil {
+		return domain.GlobalUsageAggregate{}, fmt.Errorf("aggregate global usage summary: %w", err)
+	}
+	return domain.GlobalUsageAggregate{
+		EventCount: row.EventCount,
+		Tokens: domain.UsageTokenMetrics{
+			InputTokens:         int64PtrWhen(row.InputTokens, row.KnownInputTokenCount == row.EventCount),
+			CachedInputTokens:   int64PtrWhen(row.CachedInputTokens, row.KnownCachedInputTokenCount == row.EventCount),
+			UncachedInputTokens: int64PtrWhen(row.UncachedInputTokens, row.KnownUncachedInputTokenCount == row.EventCount),
+			OutputTokens:        int64PtrWhen(row.OutputTokens, row.KnownOutputTokenCount == row.EventCount),
+		},
+		Cost: domain.UsageCostAggregate{
+			EventCount: row.EventCount, PricedEventCount: row.PricedEventCount, PricedTotalNanos: row.PricedTotalNanos,
+			ObservedCostEventCount: row.ObservedCostEventCount, InferredCostEventCount: row.InferredCostEventCount,
+			KnownInputCount: row.KnownInputCount, KnownInputNanos: row.KnownInputNanos,
+			UnpricedKnownInputNanos: row.UnpricedKnownInputNanos,
+			KnownCachedInputCount:   row.KnownCachedInputCount, KnownCachedInputNanos: row.KnownCachedInputNanos,
+			UnpricedKnownCachedInputNanos: row.UnpricedKnownCachedInputNanos,
+			KnownOutputCount:              row.KnownOutputCount, KnownOutputNanos: row.KnownOutputNanos,
+			UnpricedKnownOutputNanos: row.UnpricedKnownOutputNanos,
+		},
+	}, nil
+}
+
 func usageBindingFromGen(row gen.UsageBinding) domain.UsageBindingRecord {
 	return domain.UsageBindingRecord{
 		ID:             row.ID,
