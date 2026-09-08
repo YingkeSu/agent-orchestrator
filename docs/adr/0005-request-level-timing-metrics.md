@@ -74,8 +74,9 @@ The repository rules this decision must respect:
   (see Decision 1). Individual per-tool granularity is not certified in V1.
 - **LLM elapsed.** The wall time a model call or turn spent generating, as
   defined per mode in Decisions 1-2.
-- **First-token latency.** Wall time from request start to the first output
-  token/byte arriving, as defined per mode in Decision 3.
+- **First-token latency.** Wall time from the user sending the message to the
+  first response message being received (用户发送消息 → 首次收到回传消息), as defined
+  per mode in Decision 3.
 
 ## Decision 1: data sources per mode
 
@@ -163,7 +164,9 @@ that starts mid-conversation), produce NULL fields rather than estimates.
   (durations are "LLM elapsed", not "model-reported latency").
 - Because facts are captured at ingestion, later transcript rotation or
   deletion does not destroy timing (see Decision 5).
-- The first-token metric is constrained by what artifacts record (Decision 3).
+- First-token latency is derived per source from the user/prompt record to the
+  first assistant response record, and is constrained by whether the certified
+  artifact records both anchors (Decision 3).
 
 ## Decision 2: storage shape
 
@@ -269,22 +272,38 @@ record was missing or predates capture. A request whose LLM delta rounds to
 
 ### First-token latency
 
-Per request: wall time from request start to first output content.
+Per request: **wall time from the user sending the message to the first response
+message being received** (用户发送消息 → 首次收到回传消息). This is the definition
+used everywhere below; it deliberately measures the round trip the user feels
+(request sent → first reply received), not the provider's internal first-byte
+time.
 
-- **Chat mode:** `first assistant content row creation` minus `turn.started_at`,
-  where "first assistant content row" is the turn's first assistant message or
-  streamed activity. This is only certified if the chat driver creates the
-  assistant row when streaming starts rather than when it completes; the
-  implementing slice must confirm that stamping and, if needed, make the
-  minimal change so the durable row records first-content arrival. Until that
-  is confirmed, chat first-token stays NULL.
-- **Native/TUI mode:** NULL unless a certified artifact records a stream-start
-  or first-item-arrival timestamp distinct from the request's completion. Today
-  none of the four certified shapes is known to carry one, so native first-token
-  is expected to be NULL across the board initially. If #7 finds certified
-  evidence for a source (for example a rollout record timestamped at first
-  response-item arrival), that source may populate it; otherwise it remains
-  unknown. Never derive first-token from completion-to-completion gaps.
+- **Chat mode:** align to the same semantics as native mode: user-send time to
+  first content received. The durable read model has `conversation_turns.requested_at`
+  (when the user's message was requested/sent) and the turn's first assistant
+  `conversation_messages`/`conversation_activities` row (when the first reply
+  content was received). First-token = first assistant content row `created_at`
+  minus `requested_at`. Unlike the previous draft, `started_at` is not the
+  start anchor: `requested_at` records user send time, which is what the
+  definition calls for; `started_at` to `completed_at` still backs the turn
+  wall-time metric (Decision 1). This is only certified if the chat driver
+  creates the assistant row when streaming content arrives rather than at final
+  completion; the implementing slice must confirm that stamping and, if needed,
+  make the minimal change so the durable row records first-content arrival.
+  Until that is confirmed, chat first-token stays NULL.
+- **Native/TUI mode:** **derivable, not NULL.** The certified transcripts
+  record both a user/prompt record timestamp and the first assistant response
+  record timestamp, so first-token is derived per source from those two
+  timestamps under the same per-source certification rule as the other
+  durations (Decision 1). For Claude Code, the user message record precedes the
+  first assistant completion record; for Codex rollout and Kimi wire, the
+  prompt/turn record precedes the first assistant response record. The exact
+  boundary records per source are fixed by #7 with parser tests. A record whose
+  prompt anchor is missing (a subagent transcript that starts mid-conversation,
+  or a session resumed from a mid-stream cursor) yields NULL first-token, never
+  an estimate. First-token is the gap to the **first** assistant record after
+  the prompt, not the gap to the prompt's own completion, and never a
+  completion-to-completion interval.
 
 Session average: arithmetic mean over the requests whose first-token value is
 known, reported with a coverage figure (e.g. "12 of 15 requests"). A session
@@ -311,15 +330,19 @@ unknown.
    it weights short requests disproportionately; the ratio-of-sums definition
    matches how the token totals themselves are summed.
 3. **Derive native first-token from the gap between a prompt record and the
-   next assistant record.** Rejected: that interval includes provider queueing
-   and tool work and is not a first-token measurement; labeling it as one would
-   be guessing dressed as certification.
+   next assistant record.** Accepted as the chosen definition (see above), with
+   one guard: it is the gap to the **first** assistant record after the prompt,
+   and it measures the transcript-clock round trip the user feels. It is not
+   labeled as the provider's internal first-byte time; that remains unavailable
+   and is never derived.
 
 ### Consequences
 
-- "first token avg" renders for chat sessions that stamp first-content arrival,
-  and as an explicit unknown for native sessions until a certified artifact
-  provides it. The honest hole is visible and deliberate.
+- "first token avg" renders for both modes where the facts exist: chat sessions
+  that stamp first-content arrival (measured from user send time), and native
+  sessions where the transcript records a user prompt followed by a first
+  assistant response. Sessions or requests missing the needed anchor render the
+  explicit unknown marker. The honest hole is visible and deliberate.
 - tok/s and first-token are never stored, so they cannot go stale and need no
   backfill.
 - The UI must have one unknown marker for "not collected" that is visually
@@ -440,32 +463,40 @@ These decisions change the blocked slices' scope as follows:
   `model_usage_event_timing` migration plus sqlc queries, per-source transcript
   timing derivation under the Decision 1 certification rule, atomic child-row
   writes in `ApplyUsageChunk`, forward-fill only, nil semantics, and
-  deterministic-replay tests. #7 must also confirm the chat first-content
-  stamping question from Decision 3 and either make the minimal durable change
-  or leave chat first-token NULL. Public DTOs still land with the consuming UI
-  slices (#8/#9).
+  deterministic-replay tests. **First-token is now part of the native
+  derivation**, from the user/prompt record timestamp to the first assistant
+  response record timestamp per source; #7 fixes the exact boundary records
+  with parser tests and writes `first_token_ms`. #7 must also confirm the chat
+  first-content stamping question from Decision 3 and either make the minimal
+  durable change or leave chat first-token NULL. Public DTOs still land with
+  the consuming UI slices (#8/#9).
 - **#8 "duration and first-token columns in the request log".** Shape unchanged;
   semantics clarified: request-log rows are usage events, so the duration column
-  is `llm_ms` joined from `model_usage_event_timing`, and first-token is expected
-  to render the unknown marker for native rows until a certified stream-start
-  source exists. Nil-preserving DTO and unknown-marker rendering stay as
-  specified.
+  is `llm_ms` joined from `model_usage_event_timing`, and the first-token column
+  is `first_token_ms` joined from the same table. **Native rows now carry
+  first-token values** where the transcript recorded the prompt and first
+  response; rows whose prompt anchor is missing render the unknown marker.
+  Nil-preserving DTO and unknown-marker rendering stay as specified.
 - **#9 "session runtime stats bar".** Becomes a mode-aware read model: for chat
   sessions, rounds/turns, steps, tool time, and LLM time derive from the
   conversation tables; for native sessions they aggregate certified events and
   their timing rows; token/cost sections come from the usage-event totals as
-  today. Sessions without timing facts degrade to token/cost with unknown timing
-  markers. Where a chat-mode session also carries certified usage events (a chat
-  driver running a certified CLI that writes transcripts), the slice must define
-  precedence between the two fact families in tests; that is a #9 concern, not a
-  storage one.
+  today. **The "first token avg" strip is populated in both modes** where the
+  anchors exist, and shows the coverage figure (known-count of requests) as in
+  Decision 3. Sessions without timing facts degrade to token/cost with unknown
+  timing markers. Where a chat-mode session also carries certified usage events
+  (a chat driver running a certified CLI that writes transcripts), the slice
+  must define precedence between the two fact families in tests; that is a #9
+  concern, not a storage one.
 
 ## Open items the implementation slices must verify
 
 1. Whether the chat driver stamps assistant rows at first-content arrival (D3);
-   if not, whether to add that stamp.
-2. Whether any certified native artifact records a stream-start/first-item
-   arrival timestamp usable as first-token (D3); per-source evidence and tests.
+   if not, whether to add that stamp, so chat first-token (measured from
+   `requested_at`) is certifiable.
+2. Exact per-source boundary records for the first-token interval (user/prompt
+   record → first assistant response record) in Claude, Codex, and Kimi
+   transcripts under the D1 certification rule.
 3. Exact per-source boundary records for LLM/tool intervals in Codex and Kimi
    transcripts under the D1 certification rule.
 4. Round-prompt marker detection per source (Claude Code text user messages
