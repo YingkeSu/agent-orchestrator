@@ -663,6 +663,102 @@ WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
   AND (sqlc.narg(model) IS NULL OR mue.model_id = sqlc.narg(model))
 ORDER BY us.kind, mue.model_id;
 
+-- name: AggregateUsageByModel :many
+-- Global per-model usage rollup over an optional created_at range with optional
+-- source/model filters (the same optional filter params the summary accepts).
+-- Every counter mirrors the summary aggregate per model: a summed metric is only
+-- meaningful when every event in the group carried it, so the known_*_count
+-- columns let the service drop any component that is not fully known. The
+-- billing provider is a pricing input rather than a grouping key: a model stays
+-- one row even when more than one provider served it.
+SELECT
+    mue.model_id AS group_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(mue.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(mue.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(mue.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(mue.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' THEN 1 END) AS INTEGER) AS observed_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' THEN 1 END) AS INTEGER) AS inferred_event_count,
+    CAST(COUNT(mue.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(mue.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(mue.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(mue.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(mue.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(mue.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM model_usage_events mue
+LEFT JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
+  AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+  AND (sqlc.narg(source) IS NULL OR us.kind = sqlc.narg(source))
+  AND (sqlc.narg(model) IS NULL OR mue.model_id = sqlc.narg(model))
+GROUP BY mue.model_id
+ORDER BY mue.model_id;
+
+-- name: AggregateUsageByProvider :many
+-- Global per-billing-provider usage rollup over an optional created_at range
+-- with optional source/model filters (the same optional filter params the
+-- summary accepts). Events without a billing provider attribution
+-- (billing_provider_id IS NULL) group into the empty-string bucket so request
+-- counts and token totals never silently vanish from the provider view.
+SELECT
+    COALESCE(mue.billing_provider_id, '') AS group_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(mue.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(mue.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(mue.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(mue.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' THEN 1 END) AS INTEGER) AS observed_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' THEN 1 END) AS INTEGER) AS inferred_event_count,
+    CAST(COUNT(mue.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(mue.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(mue.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(mue.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(mue.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(mue.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM model_usage_events mue
+LEFT JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
+  AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+  AND (sqlc.narg(source) IS NULL OR us.kind = sqlc.narg(source))
+  AND (sqlc.narg(model) IS NULL OR mue.model_id = sqlc.narg(model))
+GROUP BY COALESCE(mue.billing_provider_id, '')
+ORDER BY COALESCE(mue.billing_provider_id, '');
+
 -- name: GetUsageSessionIncomplete :one
 SELECT CAST(COALESCE((
     SELECT incomplete FROM usage_session_integrity WHERE session_id = ?

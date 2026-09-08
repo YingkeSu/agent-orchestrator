@@ -17,6 +17,8 @@ type UsageSummaryService interface {
 	ListCompact(context.Context, domain.ProjectID) ([]domain.CompactSessionUsage, error)
 	Get(context.Context, domain.SessionID) (domain.SessionUsageSummary, error)
 	Global(context.Context, *time.Time, *time.Time, string, string) (domain.GlobalUsageSummary, error)
+	Models(context.Context, *time.Time, *time.Time, string, string) ([]domain.ModelUsageStatsRow, error)
+	Providers(context.Context, *time.Time, *time.Time, string, string) ([]domain.ProviderUsageStatsRow, error)
 }
 
 // UsageController owns compact dashboard usage routes.
@@ -29,6 +31,8 @@ func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/{sessionId}", c.getSession)
 	r.Get("/usage/summary", c.getSummary)
+	r.Get("/usage/models", c.getModelStats)
+	r.Get("/usage/providers", c.getProviderStats)
 }
 
 // getSummary returns the global cross-session usage summary over an optional
@@ -84,6 +88,82 @@ func parseOptionalTime(raw string) (*time.Time, error) {
 		return nil, err
 	}
 	return &parsed, nil
+}
+
+// getModelStats returns per-model usage rollups over an optional created_at
+// range with optional source/model filters. from/to are RFC 3339 timestamps;
+// omitting either leaves that side unbounded, and omitting source/model leaves
+// that filter unbounded.
+func (c *UsageController) getModelStats(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/models")
+		return
+	}
+	query := r.URL.Query()
+	from, err := parseOptionalTime(query.Get("from"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_FROM", "from must be an RFC 3339 timestamp", nil)
+		return
+	}
+	to, err := parseOptionalTime(query.Get("to"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_TO", "to must be an RFC 3339 timestamp", nil)
+		return
+	}
+	rows, err := c.Svc.Models(r.Context(), from, to, query.Get("source"), query.Get("model"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	models := make([]UsageModelStatsRow, 0, len(rows))
+	for _, row := range rows {
+		models = append(models, UsageModelStatsRow{
+			ModelID: row.ModelID, RequestCount: row.Stats.RequestCount,
+			ProcessedTokens: row.Stats.ProcessedTokens, TotalCostNanos: row.Stats.TotalCostNanos,
+			AverageCostPerRequestNanos: row.Stats.AverageCostPerRequestNanos,
+		})
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListUsageModelStatsResponse{Models: models})
+}
+
+// getProviderStats returns per-billing-provider usage rollups over an optional
+// created_at range with optional source/model filters. Provider rows carry the
+// billing attribution source so inferred rows can be displayed honestly.
+func (c *UsageController) getProviderStats(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/providers")
+		return
+	}
+	query := r.URL.Query()
+	from, err := parseOptionalTime(query.Get("from"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_FROM", "from must be an RFC 3339 timestamp", nil)
+		return
+	}
+	to, err := parseOptionalTime(query.Get("to"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_TO", "to must be an RFC 3339 timestamp", nil)
+		return
+	}
+	rows, err := c.Svc.Providers(r.Context(), from, to, query.Get("source"), query.Get("model"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	providers := make([]UsageProviderStatsRow, 0, len(rows))
+	for _, row := range rows {
+		var attribution *string
+		if row.AttributionSource != "" {
+			source := string(row.AttributionSource)
+			attribution = &source
+		}
+		providers = append(providers, UsageProviderStatsRow{
+			BillingProviderID: row.ProviderID, AttributionSource: attribution,
+			RequestCount: row.Stats.RequestCount, ProcessedTokens: row.Stats.ProcessedTokens,
+			TotalCostNanos: row.Stats.TotalCostNanos, AverageCostPerRequestNanos: row.Stats.AverageCostPerRequestNanos,
+		})
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListUsageProviderStatsResponse{Providers: providers})
 }
 
 func (c *UsageController) listSessions(w http.ResponseWriter, r *http.Request) {

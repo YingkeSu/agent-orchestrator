@@ -27,6 +27,17 @@ type fakeUsageSummaryService struct {
 	source    string
 	model     string
 	err       error
+
+	models         []domain.ModelUsageStatsRow
+	providers      []domain.ProviderUsageStatsRow
+	modelFrom      *time.Time
+	modelTo        *time.Time
+	modelSource    string
+	modelModel     string
+	providerFrom   *time.Time
+	providerTo     *time.Time
+	providerSource string
+	providerModel  string
 }
 
 func (f *fakeUsageSummaryService) ListCompact(_ context.Context, projectID domain.ProjectID) ([]domain.CompactSessionUsage, error) {

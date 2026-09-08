@@ -18,6 +18,8 @@ type usageSummaryStore interface {
 	GetUsageSessionIncomplete(context.Context, domain.SessionID) (bool, error)
 	AggregateUsageSummary(context.Context, *time.Time, *time.Time, string, string) (domain.GlobalUsageAggregate, error)
 	ListUsageSummaryDimensions(context.Context, *time.Time, *time.Time, string, string) (domain.UsageSummaryDimensions, error)
+	AggregateUsageByModel(context.Context, *time.Time, *time.Time, string, string) ([]domain.UsageModelScopeAggregate, error)
+	AggregateUsageByProvider(context.Context, *time.Time, *time.Time, string, string) ([]domain.UsageProviderScopeAggregate, error)
 }
 
 // SummaryReader derives token and estimated-cost summaries from normalized

@@ -1,11 +1,15 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Layers } from "lucide-react";
+import type { components } from "../../api/schema";
 import { AgentAvatar } from "./AgentAvatar";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useUsageSummary } from "../hooks/useUsageSummary";
+import { useUsageModelStats, useUsageProviderStats } from "../hooks/useUsageAggregates";
+import { UsageAggregateTable, type UsageAggregateRow } from "./UsageAggregateTable";
 import type { MessageKey } from "../i18n/messages";
 import { formatCostNanos } from "../lib/format-cost";
 import { formatTokenCount } from "../lib/format-token-count";
@@ -95,6 +99,17 @@ export function UsageStatisticsView() {
 	const [model, setModel] = useState("");
 	const range = useMemo(() => rangeFor(preset), [preset]);
 	const { data, isLoading, isError } = useUsageSummary(range.from, range.to, source || undefined, model || undefined);
+	const modelStats = useUsageModelStats(range.from, range.to, source || undefined, model || undefined);
+	const providerStats = useUsageProviderStats(range.from, range.to, source || undefined, model || undefined);
+
+	const modelRows = useMemo(
+		() => sortByCostDesc((modelStats.data ?? []).map(toModelRow)),
+		[modelStats.data],
+	);
+	const providerRows = useMemo(
+		() => sortByCostDesc((providerStats.data ?? []).map(toProviderRow)),
+		[providerStats.data],
+	);
 
 	const totals = data?.totals;
 	const totalTokens = totals?.processedTokens ?? 0;
@@ -273,6 +288,29 @@ export function UsageStatisticsView() {
 							</CardContent>
 						</Card>
 
+						<Tabs defaultValue="models" className="flex flex-col gap-4">
+							<TabsList>
+								<TabsTrigger value="models">{t("usage.tab.models")}</TabsTrigger>
+								<TabsTrigger value="providers">{t("usage.tab.providers")}</TabsTrigger>
+							</TabsList>
+							<TabsContent value="models">
+								<UsageAggregateTable
+									variant="models"
+									rows={modelRows}
+									isLoading={modelStats.isLoading}
+									isError={modelStats.isError}
+								/>
+							</TabsContent>
+							<TabsContent value="providers">
+								<UsageAggregateTable
+									variant="providers"
+									rows={providerRows}
+									isLoading={providerStats.isLoading}
+									isError={providerStats.isError}
+								/>
+							</TabsContent>
+						</Tabs>
+
 						{data.requestCount === 0 ? (
 							<p className="text-sm text-muted-foreground">{t("usage.emptyRange")}</p>
 						) : null}
@@ -290,4 +328,39 @@ function formatTokens(value: number | null | undefined): string | null {
 
 function formatCount(value: number): string {
 	return new Intl.NumberFormat(undefined).format(value);
+}
+
+function toModelRow(row: components["schemas"]["UsageModelStatsRow"]): UsageAggregateRow {
+	return {
+		name: row.modelId,
+		requestCount: row.requestCount,
+		tokens: row.processedTokens,
+		totalCostNanos: row.totalCostNanos,
+		averageCostPerRequestNanos: row.avgCostPerRequestNanos,
+	};
+}
+
+function toProviderRow(row: components["schemas"]["UsageProviderStatsRow"]): UsageAggregateRow {
+	return {
+		name: row.billingProviderId,
+		attribution: row.attributionSource,
+		requestCount: row.requestCount,
+		tokens: row.processedTokens,
+		totalCostNanos: row.totalCostNanos,
+		averageCostPerRequestNanos: row.avgCostPerRequestNanos,
+	};
+}
+
+function sortByCostDesc(rows: UsageAggregateRow[]): UsageAggregateRow[] {
+	return [...rows].sort((a, b) => {
+		const aCost = a.totalCostNanos;
+		const bCost = b.totalCostNanos;
+		if ((aCost == null) !== (bCost == null)) {
+			return aCost == null ? 1 : -1;
+		}
+		if (aCost != null && bCost != null && aCost !== bCost) {
+			return bCost - aCost;
+		}
+		return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+	});
 }
