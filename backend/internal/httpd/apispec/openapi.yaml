@@ -6612,6 +6612,83 @@ paths:
       summary: Check local machine readiness (git, tmux, agent harness, gh)
       tags:
       - system
+  /api/v1/usage/log:
+    get:
+      operationId: getUsageRequestLog
+      parameters:
+      - description: Inclusive lower created_at bound (RFC 3339).
+        in: query
+        name: from
+        schema:
+          description: Inclusive lower created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Inclusive upper created_at bound (RFC 3339).
+        in: query
+        name: to
+        schema:
+          description: Inclusive upper created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Optional usage source kind filter (for example claude_main or
+          codex_rollout).
+        in: query
+        name: source
+        schema:
+          description: Optional usage source kind filter (for example claude_main
+            or codex_rollout).
+          type: string
+      - description: Optional exact model id filter.
+        in: query
+        name: model
+        schema:
+          description: Optional exact model id filter.
+          type: string
+      - description: Requested page size, clamped to a bounded maximum.
+        in: query
+        name: limit
+        schema:
+          description: Requested page size, clamped to a bounded maximum.
+          format: int64
+          minimum: 1
+          type: integer
+      - description: 'Keyset cursor: return only events with id below this value.'
+        in: query
+        name: before
+        schema:
+          description: 'Keyset cursor: return only events with id below this value.'
+          format: int64
+          minimum: 1
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersUsageRequestLogResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List a bounded, newest-first page of usage events over an optional
+        time range
+      tags:
+      - usage
   /api/v1/usage/models:
     get:
       operationId: getUsageModelStats
@@ -8307,6 +8384,90 @@ components:
           - boolean
       required:
       - enabled
+      type: object
+    ControllersUsageRequestLogEntryResponse:
+      properties:
+        billingProviderId:
+          description: Billing catalog provider, null when attribution is pending.
+          type:
+          - "null"
+          - string
+        cachedInputTokens:
+          description: Input read from an existing provider cache.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        createdAt:
+          description: Event timestamp, null for pre-capture events.
+          format: date-time
+          type:
+          - "null"
+          - string
+        estimatedCostNanos:
+          description: Durable nano-USD estimate, null when not yet priced.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        id:
+          format: int64
+          type: integer
+        inputTokens:
+          description: Total input, including cached and uncached input.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        modelId:
+          type: string
+        outputTokens:
+          description: Total output.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        sessionExists:
+          description: Whether the owning session row still exists and can be opened.
+          type: boolean
+        sessionId:
+          description: Owning session id.
+          type: string
+        sourceKind:
+          enum:
+          - claude_main
+          - claude_subagent
+          - codex_rollout
+          - kimi_wire
+          type: string
+      required:
+      - id
+      - createdAt
+      - billingProviderId
+      - modelId
+      - inputTokens
+      - cachedInputTokens
+      - outputTokens
+      - estimatedCostNanos
+      - sourceKind
+      - sessionId
+      - sessionExists
+      type: object
+    ControllersUsageRequestLogResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ControllersUsageRequestLogEntryResponse'
+          type: array
+        nextBeforeId:
+          description: Cursor for the next older page, null when this is the last
+            page.
+          type:
+          - "null"
+          - integer
+      required:
+      - items
+      - nextBeforeId
       type: object
     ConversationAccountPayload:
       properties:

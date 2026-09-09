@@ -1845,5 +1845,24 @@
 	"usage.sourceKind.kimiWire": "Kimi",
 	"usage.tab.models": "モデル統計",
 	"usage.tab.providers": "プロバイダー統計",
-	"usage.unattributed": "未帰属"
+	"usage.unattributed": "未帰属",
+	"usage.log.title": "リクエストログ",
+	"usage.log.loading": "リクエストログを読み込み中…",
+	"usage.log.loadFailed": "リクエストログを読み込めませんでした。",
+	"usage.log.empty": "この範囲にリクエストはありません。",
+	"usage.log.time": "時刻",
+	"usage.log.provider": "プロバイダー",
+	"usage.log.model": "モデル",
+	"usage.log.input": "入力",
+	"usage.log.output": "出力",
+	"usage.log.cost": "コスト",
+	"usage.log.source": "ソース",
+	"usage.log.session": "セッション",
+	"usage.log.loadMore": "さらに読み込む",
+	"usage.log.loadingMore": "読み込み中…",
+	"usage.log.source.claude_main": "Claude メイン",
+	"usage.log.source.claude_subagent": "Claude サブエージェント",
+	"usage.log.source.codex_rollout": "Codex ロールアウト",
+	"usage.log.source.kimi_wire": "Kimi ワイヤー"
+
 }

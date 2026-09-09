@@ -675,6 +675,222 @@ func TestListUsageSummaryDimensionsScopesOptionsToTheFilteredRange(t *testing.T)
 	}
 }
 
+func TestListUsageRequestLogReturnsNewestFirstWithCursorAndSessionExists(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	day1 := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	day2 := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+
+	codexSession := seedUsageSession(t, s, domain.HarnessCodex)
+	codexSource := seedUsageSource(t, s, codexSession, day1)
+	claudeSession := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	claudeSource := seedUsageSource(t, s, claudeSession, day2)
+
+	codexEvent := usageEvent("codex-e1", canonicalUsageTokens(100, 40, 60, 30))
+	codexEvent.BillingProviderID = "openai"
+	codexEvent.BillingProviderSource = domain.UsageBillingProviderObserved
+	codexEvent.CreatedAt = day1
+	codexTotal := int64(150)
+	codexEvent.Costs = domain.UsageEventCosts{EstimatedCostNanos: &codexTotal}
+	mustNoError(t, s.ApplyUsageChunk(ctx, codexSource.ID, 0, codexSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: day1,
+	}, []domain.ModelUsageEvent{codexEvent}, nil))
+
+	claudeEvent := anthropicUsageEvent("claude-e1", 20, 10, 40, 15)
+	claudeEvent.CreatedAt = day2
+	mustNoError(t, s.ApplyUsageChunk(ctx, claudeSource.ID, 0, claudeSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: day2,
+	}, []domain.ModelUsageEvent{claudeEvent}, nil))
+
+	// Newest first across both sessions, no filter.
+	rows, err := s.ListUsageRequestLog(ctx, nil, nil, "", "", nil, 10)
+	mustNoError(t, err, "unbounded")
+	if len(rows) != 2 {
+		t.Fatalf("unbounded rows = %d, want 2", len(rows))
+	}
+	if rows[0].SessionID != claudeSession.ID || rows[0].SourceKind != domain.UsageSourceClaudeMain ||
+		rows[0].SessionExists != true || usageTokenValue(rows[0].InputTokens) != 70 ||
+		rows[0].BillingProviderID != "" {
+		t.Fatalf("newest row = %+v", rows[0])
+	}
+	if rows[1].SessionID != codexSession.ID || rows[1].SourceKind != domain.UsageSourceCodexRollout ||
+		rows[1].BillingProviderID != "openai" || usageTokenValue(rows[1].EstimatedCostNanos) != 150 {
+		t.Fatalf("older row = %+v", rows[1])
+	}
+
+	// Filter to day1 only returns just the codex event.
+	day1End := day1.Add(24 * time.Hour)
+	day1Rows, err := s.ListUsageRequestLog(ctx, &day1, &day1End, "", "", nil, 10)
+	mustNoError(t, err, "day1 range")
+	if len(day1Rows) != 1 || day1Rows[0].SessionID != codexSession.ID {
+		t.Fatalf("day1 rows = %+v", day1Rows)
+	}
+
+	// A before cursor at 0 (every event id is >= 1) returns nothing.
+	zero := int64(0)
+	afterRows, err := s.ListUsageRequestLog(ctx, nil, nil, "", "", &zero, 10)
+	mustNoError(t, err, "before cursor")
+	if len(afterRows) != 0 {
+		t.Fatalf("after-cursor rows = %+v, want none", afterRows)
+	}
+}
+
+func TestListUsageRequestLogReturnsRowsWithoutLinkWhenSessionDeleted(t *testing.T) {
+	dataDir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dataDir)
+	ctx := context.Background()
+
+	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	sess := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	source := seedUsageSource(t, s, sess, now)
+	event := anthropicUsageEvent("gone-e1", 10, 5, 20, 8)
+	event.CreatedAt = now
+	mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{event}, nil))
+
+	// The sessions row can disappear while its usage rows survive (legacy
+	// cleanup, a migration window, or foreign-key-disabled tooling). The log
+	// must still return the event with sessionExists=false so the client
+	// renders no link instead of a broken one.
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db")+"?_pragma=foreign_keys(0)&_pragma=busy_timeout(5000)")
+	mustNoError(t, err, "open raw db")
+	defer raw.Close()
+	if _, err := raw.ExecContext(ctx, "DELETE FROM sessions WHERE id = ?", string(sess.ID)); err != nil {
+		t.Fatalf("delete session row: %v", err)
+	}
+
+	rows, err := s.ListUsageRequestLog(ctx, nil, nil, "", "", nil, 10)
+	mustNoError(t, err, "after delete")
+	if len(rows) != 1 {
+		t.Fatalf("rows after delete = %d, want 1", len(rows))
+	}
+	if rows[0].SessionID != sess.ID || rows[0].SessionExists {
+		t.Fatalf("deleted-session row = %+v, want sessionExists false", rows[0])
+	}
+}
+
+func TestListUsageRequestLogPagesStablyWithOutOfOrderAndNullTimestamps(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+	sess := seedUsageSession(t, s, domain.HarnessCodex)
+	source := seedUsageSource(t, s, sess, now)
+
+	// Insert six events whose created_at is deliberately NOT monotonic with id:
+	// pre-capture NULL timestamps and backfilled rows whose timestamps sort
+	// against their insertion order. Ordering must be by event id so the id
+	// keyset cursor never drops or repeats a row across pages.
+	timestamps := []*time.Time{
+		nil,                               // id 1: pre-capture, no timestamp
+		timePtr(now.Add(-48 * time.Hour)), // id 2: backfilled older
+		timePtr(now.Add(-24 * time.Hour)), // id 3
+		timePtr(now),                      // id 4: newest
+		timePtr(now.Add(-72 * time.Hour)), // id 5: backfilled oldest
+		timePtr(now.Add(-12 * time.Hour)), // id 6
+	}
+	events := make([]domain.ModelUsageEvent, 0, len(timestamps))
+	for i, createdAt := range timestamps {
+		event := usageEvent(fmt.Sprintf("stability-%d", i+1), canonicalUsageTokens(10, 2, 8, 5))
+		event.ModelID = "gpt-5"
+		if createdAt != nil {
+			event.CreatedAt = *createdAt
+		}
+		events = append(events, event)
+	}
+	mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, events, nil))
+
+	// Page through with a page size of 2, using the last kept id as the next
+	// cursor exactly as the service does (the store over-fetches by one).
+	var (
+		seen   []int64
+		cursor *int64
+	)
+	for {
+		rows, err := s.ListUsageRequestLog(ctx, nil, nil, "", "", cursor, 2)
+		mustNoError(t, err, "page")
+		if len(rows) > 2 {
+			rows = rows[:2]
+		}
+		if len(rows) == 0 {
+			break
+		}
+		for _, row := range rows {
+			seen = append(seen, row.ID)
+		}
+		last := rows[len(rows)-1].ID
+		cursor = &last
+	}
+
+	want := []int64{6, 5, 4, 3, 2, 1}
+	if len(seen) != len(want) {
+		t.Fatalf("paged ids = %v, want %v", seen, want)
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Fatalf("paged ids = %v, want %v (row vanished or repeated at index %d)", seen, want, i)
+		}
+	}
+
+	// The oldest page's entries keep their NULL timestamps rather than
+	// collapsing to a zero time the client would render as year 1.
+	all, err := s.ListUsageRequestLog(ctx, nil, nil, "", "", nil, 100)
+	mustNoError(t, err)
+	if all[len(all)-1].CreatedAt != nil || all[len(all)-2].CreatedAt == nil {
+		t.Fatalf("NULL created_at must stay nil on the wire; rows = %+v", all)
+	}
+}
+
+func TestListUsageRequestLogFiltersBySourceAndModel(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+	codexSession := seedUsageSession(t, s, domain.HarnessCodex)
+	codexSource := seedUsageSource(t, s, codexSession, now)
+	codexEvent := usageEvent("codex-log", canonicalUsageTokens(100, 40, 60, 30))
+	codexEvent.ModelID = "gpt-5.6"
+	codexEvent.CreatedAt = now
+	mustNoError(t, s.ApplyUsageChunk(ctx, codexSource.ID, 0, codexSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{codexEvent}, nil))
+
+	claudeSession := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	claudeSource := seedUsageSource(t, s, claudeSession, now)
+	claudeEvent := anthropicUsageEvent("claude-log", 20, 10, 40, 15)
+	claudeEvent.ModelID = "claude-sonnet"
+	claudeEvent.CreatedAt = now
+	mustNoError(t, s.ApplyUsageChunk(ctx, claudeSource.ID, 0, claudeSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{claudeEvent}, nil))
+
+	bySource, err := s.ListUsageRequestLog(ctx, nil, nil, "codex_rollout", "", nil, 10)
+	mustNoError(t, err, "filter by source kind")
+	if len(bySource) != 1 || bySource[0].SessionID != codexSession.ID || bySource[0].SourceKind != domain.UsageSourceCodexRollout {
+		t.Fatalf("codex-filtered log = %+v, want only the codex event", bySource)
+	}
+
+	byModel, err := s.ListUsageRequestLog(ctx, nil, nil, "", "claude-sonnet", nil, 10)
+	mustNoError(t, err, "filter by model id")
+	if len(byModel) != 1 || byModel[0].SessionID != claudeSession.ID || byModel[0].ModelID != "claude-sonnet" {
+		t.Fatalf("model-filtered log = %+v, want only the claude event", byModel)
+	}
+
+	crossed, err := s.ListUsageRequestLog(ctx, nil, nil, "codex_rollout", "claude-sonnet", nil, 10)
+	mustNoError(t, err, "crossed filters")
+	if len(crossed) != 0 {
+		t.Fatalf("crossed filters log = %+v, want no events", crossed)
+	}
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
+}
+
 func TestApplyUsageChunkPersistsProviderSplitsAndPassiveCosts(t *testing.T) {
 	dataDir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dataDir)

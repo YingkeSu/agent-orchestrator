@@ -776,6 +776,40 @@ WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
 GROUP BY COALESCE(mue.billing_provider_id, '')
 ORDER BY COALESCE(mue.billing_provider_id, '');
 
+-- name: ListUsageRequestLog :many
+-- Newest-first, bounded page of normalized usage events over an optional
+-- created_at range and optional exact source kind / model id filters, plus a
+-- keyset cursor. The caller requests limit+1 rows to detect whether another
+-- page exists, then truncates to limit. Ordering is by event id descending,
+-- which is monotonic with insertion, NULL-safe (created_at is nullable and can
+-- be backfilled out of timestamp order), and stable: the before cursor filters
+-- by id, so a page never shifts as newer events are appended and no row can
+-- vanish or repeat between pages.
+SELECT
+    event.id,
+    event.created_at,
+    event.billing_provider_id,
+    event.model_id,
+    event.input_tokens,
+    event.cached_input_tokens,
+    event.output_tokens,
+    event.estimated_cost_nanos,
+    source.kind AS source_kind,
+    binding.session_id,
+    CAST(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS INTEGER) AS session_exists
+FROM model_usage_events event
+JOIN usage_sources source ON source.id = event.usage_source_id
+JOIN usage_bindings binding ON binding.id = event.binding_id
+LEFT JOIN sessions s ON s.id = binding.session_id
+WHERE (sqlc.narg(from) IS NULL OR event.created_at >= sqlc.narg(from))
+  AND (sqlc.narg(to) IS NULL OR event.created_at <= sqlc.narg(to))
+  AND (sqlc.narg(source) IS NULL OR source.kind = sqlc.narg(source))
+  AND (sqlc.narg(model) IS NULL OR event.model_id = sqlc.narg(model))
+  AND (sqlc.narg(before_id) IS NULL OR event.id < sqlc.narg(before_id))
+ORDER BY event.id DESC
+LIMIT sqlc.arg(limit);
+
+
 -- name: GetUsageSessionIncomplete :one
 SELECT CAST(COALESCE((
     SELECT incomplete FROM usage_session_integrity WHERE session_id = ?

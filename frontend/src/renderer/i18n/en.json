@@ -1865,5 +1865,24 @@
 	"usage.sourceKind.kimiWire": "Kimi",
 	"usage.tab.models": "Model stats",
 	"usage.tab.providers": "Provider stats",
-	"usage.unattributed": "Unattributed"
+	"usage.unattributed": "Unattributed",
+	"usage.log.title": "Request log",
+	"usage.log.loading": "Loading request log…",
+	"usage.log.loadFailed": "Could not load the request log.",
+	"usage.log.empty": "No requests logged in this range.",
+	"usage.log.time": "Time",
+	"usage.log.provider": "Provider",
+	"usage.log.model": "Model",
+	"usage.log.input": "Input",
+	"usage.log.output": "Output",
+	"usage.log.cost": "Cost",
+	"usage.log.source": "Source",
+	"usage.log.session": "Session",
+	"usage.log.loadMore": "Load more",
+	"usage.log.loadingMore": "Loading more…",
+	"usage.log.source.claude_main": "Claude main",
+	"usage.log.source.claude_subagent": "Claude subagent",
+	"usage.log.source.codex_rollout": "Codex rollout",
+	"usage.log.source.kimi_wire": "Kimi wire"
+
 }

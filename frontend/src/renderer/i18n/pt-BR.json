@@ -1869,5 +1869,24 @@
 	"usage.sourceKind.kimiWire": "Kimi",
 	"usage.tab.models": "Estatísticas por modelo",
 	"usage.tab.providers": "Estatísticas por provedor",
-	"usage.unattributed": "Não atribuído"
+	"usage.unattributed": "Não atribuído",
+	"usage.log.title": "Registro de solicitações",
+	"usage.log.loading": "Carregando registro de solicitações…",
+	"usage.log.loadFailed": "Não foi possível carregar o registro de solicitações.",
+	"usage.log.empty": "Nenhuma solicitação registrada neste intervalo.",
+	"usage.log.time": "Hora",
+	"usage.log.provider": "Provedor",
+	"usage.log.model": "Modelo",
+	"usage.log.input": "Entrada",
+	"usage.log.output": "Saída",
+	"usage.log.cost": "Custo",
+	"usage.log.source": "Origem",
+	"usage.log.session": "Sessão",
+	"usage.log.loadMore": "Carregar mais",
+	"usage.log.loadingMore": "Carregando…",
+	"usage.log.source.claude_main": "Claude principal",
+	"usage.log.source.claude_subagent": "Claude subagente",
+	"usage.log.source.codex_rollout": "Codex rollout",
+	"usage.log.source.kimi_wire": "Kimi wire"
+
 }

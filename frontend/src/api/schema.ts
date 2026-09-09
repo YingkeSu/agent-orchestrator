@@ -2318,6 +2318,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a bounded, newest-first page of usage events over an optional time range */
+        get: operations["getUsageRequestLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/models": {
         parameters: {
             query?: never;
@@ -2913,6 +2930,37 @@ export interface components {
         };
         ControllersUpdateCloudOfferingRequest: {
             enabled: null | boolean;
+        };
+        ControllersUsageRequestLogEntryResponse: {
+            /** @description Billing catalog provider, null when attribution is pending. */
+            billingProviderId: null | string;
+            /** @description Input read from an existing provider cache. */
+            cachedInputTokens: null | number;
+            /**
+             * Format: date-time
+             * @description Event timestamp, null for pre-capture events.
+             */
+            createdAt: null | string;
+            /** @description Durable nano-USD estimate, null when not yet priced. */
+            estimatedCostNanos: null | number;
+            /** Format: int64 */
+            id: number;
+            /** @description Total input, including cached and uncached input. */
+            inputTokens: null | number;
+            modelId: string;
+            /** @description Total output. */
+            outputTokens: null | number;
+            /** @description Whether the owning session row still exists and can be opened. */
+            sessionExists: boolean;
+            /** @description Owning session id. */
+            sessionId: string;
+            /** @enum {string} */
+            sourceKind: "claude_main" | "claude_subagent" | "codex_rollout" | "kimi_wire";
+        };
+        ControllersUsageRequestLogResponse: {
+            items: components["schemas"]["ControllersUsageRequestLogEntryResponse"][];
+            /** @description Cursor for the next older page, null when this is the last page. */
+            nextBeforeId: null | number;
         };
         ConversationAccountPayload: {
             authMode?: string;
@@ -12790,6 +12838,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemRequirementsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageRequestLog: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower created_at bound (RFC 3339). */
+                from?: string;
+                /** @description Inclusive upper created_at bound (RFC 3339). */
+                to?: string;
+                /** @description Optional usage source kind filter (for example claude_main or codex_rollout). */
+                source?: string;
+                /** @description Optional exact model id filter. */
+                model?: string;
+                /** @description Requested page size, clamped to a bounded maximum. */
+                limit?: number;
+                /** @description Keyset cursor: return only events with id below this value. */
+                before?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersUsageRequestLogResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

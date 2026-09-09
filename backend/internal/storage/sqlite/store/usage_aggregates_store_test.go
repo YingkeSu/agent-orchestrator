@@ -48,7 +48,7 @@ func TestAggregateUsageByModelAndProviderRollsUpAcrossSessionsAndFilters(t *test
 
 	mustNoError(t, s.ApplyUsageChunk(ctx, codexSource.ID, 0, codexSource.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: day1,
-	}, []domain.ModelUsageEvent{gptObserved, gptInferred, gpt51}), "seed codex events")
+	}, []domain.ModelUsageEvent{gptObserved, gptInferred, gpt51}, nil), "seed codex events")
 
 	// Day 2 claude events: one attributed and priced, one unattributed.
 	claudePriced := anthropicUsageEvent("claude-priced", 20, 10, 40, 15)
@@ -62,7 +62,7 @@ func TestAggregateUsageByModelAndProviderRollsUpAcrossSessionsAndFilters(t *test
 
 	mustNoError(t, s.ApplyUsageChunk(ctx, claudeSource.ID, 0, claudeSource.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: day2,
-	}, []domain.ModelUsageEvent{claudePriced, claudeUnattributed}), "seed claude events")
+	}, []domain.ModelUsageEvent{claudePriced, claudeUnattributed}, nil), "seed claude events")
 
 	t.Run("per-model unbounded", func(t *testing.T) {
 		models, err := s.AggregateUsageByModel(ctx, nil, nil, "", "")

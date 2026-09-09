@@ -1845,5 +1845,24 @@
 	"usage.sourceKind.kimiWire": "Kimi",
 	"usage.tab.models": "Modellstatistik",
 	"usage.tab.providers": "Anbieterstatistik",
-	"usage.unattributed": "Nicht zugeordnet"
+	"usage.unattributed": "Nicht zugeordnet",
+	"usage.log.title": "Anfrageprotokoll",
+	"usage.log.loading": "Anfrageprotokoll wird geladen…",
+	"usage.log.loadFailed": "Das Anfrageprotokoll konnte nicht geladen werden.",
+	"usage.log.empty": "In diesem Zeitraum wurden keine Anfragen protokolliert.",
+	"usage.log.time": "Zeit",
+	"usage.log.provider": "Anbieter",
+	"usage.log.model": "Modell",
+	"usage.log.input": "Eingabe",
+	"usage.log.output": "Ausgabe",
+	"usage.log.cost": "Kosten",
+	"usage.log.source": "Quelle",
+	"usage.log.session": "Sitzung",
+	"usage.log.loadMore": "Mehr laden",
+	"usage.log.loadingMore": "Wird geladen…",
+	"usage.log.source.claude_main": "Claude Haupt",
+	"usage.log.source.claude_subagent": "Claude Subagent",
+	"usage.log.source.codex_rollout": "Codex Rollout",
+	"usage.log.source.kimi_wire": "Kimi Wire"
+
 }

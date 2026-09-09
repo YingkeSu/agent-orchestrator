@@ -1827,5 +1827,24 @@
 	"usage.sourceKind.kimiWire": "Kimi",
 	"usage.tab.models": "模型统计",
 	"usage.tab.providers": "提供方统计",
-	"usage.unattributed": "未归属"
+	"usage.unattributed": "未归属",
+	"usage.log.title": "请求日志",
+	"usage.log.loading": "正在加载请求日志…",
+	"usage.log.loadFailed": "无法加载请求日志。",
+	"usage.log.empty": "此范围内没有请求记录。",
+	"usage.log.time": "时间",
+	"usage.log.provider": "提供商",
+	"usage.log.model": "模型",
+	"usage.log.input": "输入",
+	"usage.log.output": "输出",
+	"usage.log.cost": "费用",
+	"usage.log.source": "来源",
+	"usage.log.session": "会话",
+	"usage.log.loadMore": "加载更多",
+	"usage.log.loadingMore": "正在加载更多…",
+	"usage.log.source.claude_main": "Claude 主",
+	"usage.log.source.claude_subagent": "Claude 子代理",
+	"usage.log.source.codex_rollout": "Codex 回放",
+	"usage.log.source.kimi_wire": "Kimi 接口"
+
 }

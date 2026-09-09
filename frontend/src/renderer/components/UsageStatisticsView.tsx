@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { RequestLogTable } from "./RequestLogTable";
 import { useUsageSummary } from "../hooks/useUsageSummary";
 import { useUsageModelStats, useUsageProviderStats } from "../hooks/useUsageAggregates";
 import { UsageAggregateTable, type UsageAggregateRow } from "./UsageAggregateTable";
@@ -314,6 +315,16 @@ export function UsageStatisticsView() {
 						{data.requestCount === 0 ? (
 							<p className="text-sm text-muted-foreground">{t("usage.emptyRange")}</p>
 						) : null}
+
+						<section className="flex flex-col gap-3">
+							<h2 className="text-sm font-medium text-muted-foreground">{t("usage.log.title")}</h2>
+							<RequestLogTable
+								from={range.from}
+								to={range.to}
+								source={source || undefined}
+								model={model || undefined}
+							/>
+						</section>
 					</div>
 				)}
 			</div>
