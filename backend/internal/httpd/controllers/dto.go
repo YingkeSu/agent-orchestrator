@@ -1401,6 +1401,199 @@ type SessionUsageResponse struct {
 	Harnesses  []UsageHarnessResponse `json:"harnesses"`
 }
 
+// FirstTokenCoverageResponse reports how many requests contributed to the
+// session first-token average, the ADR Decision 3 coverage figure ("12 of 15
+// requests"). Total is the session's request count in the mode's semantics:
+// usage events for native sessions, prompt-bearing turns for chat sessions.
+type FirstTokenCoverageResponse struct {
+	Covered int64 `json:"covered" minimum:"0" description:"Requests whose first-token latency was captured."`
+	Total   int64 `json:"total" minimum:"0" description:"Requests that could have carried a first-token latency."`
+}
+
+// SessionRuntimeStatsResponse is the per-session runtime statistics bar (timing
+// ADR #9): rounds, steps, LLM/tool elapsed time, first-token average, output
+// tok/s, cache-hit rate, and token/cost totals. rounds/steps/llmMs/toolMs/
+// firstTokenAvgMs/outputTokensPerSecond are derived at read time from the
+// session mode's own durable facts and are null when the session has no
+// certifiable timing facts (pre-deployment history, a non-certified harness,
+// or an uncaptured anchor) — clients render the unknown marker, never a zero.
+// totals and cacheHitRate come from usage events and are present whenever token
+// facts exist.
+type SessionRuntimeStatsResponse struct {
+	SessionID             domain.SessionID           `json:"sessionId"`
+	Rounds                *int64                     `json:"rounds" minimum:"1" description:"Count of user exchanges. Null when no round facts were captured."`
+	Steps                 *int64                     `json:"steps" minimum:"1" description:"Count of model requests/steps. Null when the session has no usage or conversation facts."`
+	LLMMS                 *int64                     `json:"llmMs" minimum:"0" description:"Total LLM elapsed time in milliseconds. Null when unknown."`
+	ToolMS                *int64                     `json:"toolMs" minimum:"0" description:"Total tool-call elapsed time in milliseconds. Null when unknown."`
+	FirstTokenAvgMS       *int64                     `json:"firstTokenAvgMs" minimum:"0" description:"Average first-token latency in milliseconds over covered requests. Null when none are covered."`
+	FirstTokenCoverage    FirstTokenCoverageResponse `json:"firstTokenCoverage"`
+	OutputTokensPerSecond *float64                   `json:"outputTokensPerSecond" minimum:"0" description:"Session average output tok/s: sum(output tokens) / sum(llm seconds) over covered requests. Null when no request carries both facts."`
+	CacheHitRate          *float64                   `json:"cacheHitRate" description:"Cached input / (cached + uncached input). Null when either component is unknown."`
+	Totals                UsageTotalsResponse        `json:"totals"`
+}
+
+// UsageSummaryQuery is the query string accepted by GET /api/v1/usage/summary.
+// from/to bound the created_at range (inclusive, RFC 3339); omitting either
+// leaves that side unbounded. source/model are exact-match filters over the
+// usage source kind and model id; omitting either leaves that filter off.
+type UsageSummaryQuery struct {
+	From   string `query:"from,omitempty" description:"Inclusive lower created_at bound (RFC 3339)." format:"date-time"`
+	To     string `query:"to,omitempty" description:"Inclusive upper created_at bound (RFC 3339)." format:"date-time"`
+	Source string `query:"source,omitempty" description:"Optional usage source kind filter (for example claude_main or codex_rollout)."`
+	Model  string `query:"model,omitempty" description:"Optional exact model id filter."`
+}
+
+// UsageSummaryResponse is the global cross-session usage summary. requestCount
+// counts usage events (token-event granularity); true request-level semantics
+// arrive with the timing pipeline. cacheHitRate is cached input divided by
+// cached plus uncached input, null when either component is unknown. sources
+// and models are the distinct values present in the same filtered range, for
+// dropdown options.
+type UsageSummaryResponse struct {
+	Totals       UsageTotalsResponse `json:"totals"`
+	RequestCount int64               `json:"requestCount" minimum:"0" description:"Count of usage events in the range (token-event granularity)."`
+	CacheHitRate *float64            `json:"cacheHitRate" description:"Cached input / (cached + uncached input). Null when either component is unknown."`
+	Sources      []string            `json:"sources" description:"Distinct usage source kinds present in the filtered range."`
+	Models       []string            `json:"models" description:"Distinct model ids present in the filtered range."`
+}
+
+// UsageAggregatesQuery is the query string accepted by the per-model and
+// per-provider aggregate endpoints. from/to bound the created_at range
+// (inclusive, RFC 3339); omitting either leaves that side unbounded. source
+// filters by usage source kind (claude_main, claude_subagent, codex_rollout,
+// kimi_wire) and model by exact model id; omitting either leaves that filter
+// unbounded, matching the optional filter params the summary accepts.
+type UsageAggregatesQuery struct {
+	From   string `query:"from,omitempty" description:"Inclusive lower created_at bound (RFC 3339)." format:"date-time"`
+	To     string `query:"to,omitempty" description:"Inclusive upper created_at bound (RFC 3339)." format:"date-time"`
+	Source string `query:"source,omitempty" description:"Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). Omit for all sources."`
+	Model  string `query:"model,omitempty" description:"Optional exact model id filter. Omit for all models."`
+}
+
+// UsageModelStatsRow is one per-model aggregate row. processedTokens is the
+// canonical input plus output across the row, null unless every event reported
+// both. totalCostNanos is the scope estimate (an estimated lower bound when
+// some events are unpriced), null when the row has no known cost.
+// avgCostPerRequestNanos is totalCostNanos divided by requestCount, null when
+// there is no known cost or no events.
+type UsageModelStatsRow struct {
+	ModelID                    string   `json:"modelId"`
+	RequestCount               int64    `json:"requestCount" minimum:"0" description:"Count of usage events in the row (token-event granularity)."`
+	ProcessedTokens            *int64   `json:"processedTokens" minimum:"0" description:"Input plus output across the row. Null unless every event reported both."`
+	TotalCostNanos             *int64   `json:"totalCostNanos" minimum:"0" description:"Estimated total cost in nano-USD. Null when the row has no known cost."`
+	AverageCostPerRequestNanos *float64 `json:"avgCostPerRequestNanos" minimum:"0" description:"Estimated total cost divided by request count. Null when cost or events are unknown."`
+}
+
+// ListUsageModelStatsResponse is the per-model aggregate table payload.
+type ListUsageModelStatsResponse struct {
+	Models []UsageModelStatsRow `json:"models"`
+}
+
+// UsageProviderStatsRow is one per-billing-provider aggregate row.
+// attributionSource reports how the row's billing provider was reached so
+// inferred rows display honestly; it is null for events with no billing
+// provider attribution (the empty billingProviderId bucket).
+type UsageProviderStatsRow struct {
+	BillingProviderID          string   `json:"billingProviderId" description:"Billing catalog provider id. Empty groups events with no provider attribution."`
+	AttributionSource          *string  `json:"attributionSource" enum:"observed,inferred,mixed" description:"How the billing provider was reached (observed, inferred, or mixed). Null when the row carries no attribution."`
+	RequestCount               int64    `json:"requestCount" minimum:"0" description:"Count of usage events in the row (token-event granularity)."`
+	ProcessedTokens            *int64   `json:"processedTokens" minimum:"0" description:"Input plus output across the row. Null unless every event reported both."`
+	TotalCostNanos             *int64   `json:"totalCostNanos" minimum:"0" description:"Estimated total cost in nano-USD. Null when the row has no known cost."`
+	AverageCostPerRequestNanos *float64 `json:"avgCostPerRequestNanos" minimum:"0" description:"Estimated total cost divided by request count. Null when cost or events are unknown."`
+}
+
+// ListUsageProviderStatsResponse is the per-provider aggregate table payload.
+type ListUsageProviderStatsResponse struct {
+	Providers []UsageProviderStatsRow `json:"providers"`
+}
+
+// UsageRequestLogQuery is the query string accepted by GET /api/v1/usage/log.
+// from/to bound the created_at range (inclusive, RFC 3339), source/model are
+// exact-match filters over the usage source kind and model id, limit bounds the
+// page size, and before is the keyset cursor of the last seen event id.
+type UsageRequestLogQuery struct {
+	From   string `query:"from,omitempty" description:"Inclusive lower created_at bound (RFC 3339)." format:"date-time"`
+	To     string `query:"to,omitempty" description:"Inclusive upper created_at bound (RFC 3339)." format:"date-time"`
+	Source string `query:"source,omitempty" description:"Optional usage source kind filter (for example claude_main or codex_rollout)."`
+	Model  string `query:"model,omitempty" description:"Optional exact model id filter."`
+	Limit  int64  `query:"limit,omitempty" description:"Requested page size, clamped to a bounded maximum." minimum:"1"`
+	Before int64  `query:"before,omitempty" description:"Keyset cursor: return only events with id below this value." minimum:"1"`
+}
+
+// UsageRequestLogEntryResponse is one usage event on the request log. Token and
+// cost counters are null when unknown. createdAt is null when the event was
+// captured before timestamps existed. sessionExists reports whether the owning
+// session row still exists so the client can link to it only when it would
+// open. llmMs and firstTokenMs are the request-level timing facts: null when
+// the event has no certified timing row, never a fabricated zero.
+type UsageRequestLogEntryResponse struct {
+	ID                 int64      `json:"id" format:"int64"`
+	CreatedAt          *time.Time `json:"createdAt" format:"date-time" description:"Event timestamp, null for pre-capture events."`
+	BillingProviderID  *string    `json:"billingProviderId" description:"Billing catalog provider, null when attribution is pending."`
+	ModelID            string     `json:"modelId"`
+	InputTokens        *int64     `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input."`
+	CachedInputTokens  *int64     `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache."`
+	OutputTokens       *int64     `json:"outputTokens" minimum:"0" description:"Total output."`
+	EstimatedCostNanos *int64     `json:"estimatedCostNanos" minimum:"0" description:"Durable nano-USD estimate, null when not yet priced."`
+	LLMMS              *int64     `json:"llmMs" minimum:"0" description:"LLM elapsed in milliseconds (transcript-clock interval), null when unknown."`
+	FirstTokenMS       *int64     `json:"firstTokenMs" minimum:"0" description:"First-token latency in milliseconds (user send to first response received), null when unknown."`
+	SourceKind         string     `json:"sourceKind" enum:"claude_main,claude_subagent,codex_rollout,kimi_wire"`
+	SessionID          string     `json:"sessionId" description:"Owning session id."`
+	SessionExists      bool       `json:"sessionExists" description:"Whether the owning session row still exists and can be opened."`
+}
+
+// UsageRequestLogResponse is one bounded page of request-log events.
+type UsageRequestLogResponse struct {
+	Items        []UsageRequestLogEntryResponse `json:"items"`
+	NextBeforeID *int64                         `json:"nextBeforeId" description:"Cursor for the next older page, null when this is the last page."`
+}
+
+// nullableString maps an empty attribution sentinel to a null pointer so
+// unattributed values stay explicit on the wire.
+func nullableString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+// UsageTrendQuery is the query string accepted by GET /api/v1/usage/trend.
+// from/to bound the created_at range and are required (inclusive, RFC 3339).
+// bucket selects hour or day buckets (default hour); the server clamps hour
+// buckets to day buckets when the range spans more than 31 days. source and
+// model are optional read-time filters matching the usage source kind that
+// produced the event and the exact model id.
+type UsageTrendQuery struct {
+	From   string `query:"from" description:"Inclusive lower created_at bound (RFC 3339). Required." format:"date-time"`
+	To     string `query:"to" description:"Inclusive upper created_at bound (RFC 3339). Required." format:"date-time"`
+	Bucket string `query:"bucket,omitempty" enum:"hour,day" description:"Bucket width. Defaults to hour; clamped to day when the range spans more than 31 days."`
+	Source string `query:"source,omitempty" description:"Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire)."`
+	Model  string `query:"model,omitempty" description:"Optional exact model id filter."`
+}
+
+// UsageTrendBucketResponse is one time-bucketed usage aggregate. Absent
+// buckets carry explicit zeros so the chart stays continuous; a bucket whose
+// metric is not fully known keeps a nil component (nil/unknown never zero).
+// Cache creation is folded into uncached input by the V1 pipeline and has no
+// separate series here.
+type UsageTrendBucketResponse struct {
+	BucketStart         time.Time `json:"bucketStart" format:"date-time"`
+	RequestCount        int64     `json:"requestCount" minimum:"0" description:"Count of usage events in the bucket (token-event granularity)."`
+	InputTokens         *int64    `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input. Null when not fully known."`
+	CachedInputTokens   *int64    `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache. Null when not fully known."`
+	UncachedInputTokens *int64    `json:"uncachedInputTokens" minimum:"0" description:"Input not read from an existing provider cache; includes cache writes. Null when not fully known."`
+	OutputTokens        *int64    `json:"outputTokens" minimum:"0" description:"Total output. Null when not fully known."`
+	CostNanos           *int64    `json:"costNanos" minimum:"0" description:"Durable estimated cost in nano-USD. Null when the bucket has no known lower bound."`
+}
+
+// UsageTrendResponse is the cross-session time-bucketed usage series over the
+// requested range. bucketSize is the size actually used (hour buckets are
+// clamped to day for ranges longer than 31 days).
+type UsageTrendResponse struct {
+	BucketSize string                     `json:"bucketSize" enum:"hour,day"`
+	Buckets    []UsageTrendBucketResponse `json:"buckets"`
+}
+
 // SystemRequirementsResponse is the body of GET /api/v1/system/requirements.
 type SystemRequirementsResponse = systemcheck.Report
 

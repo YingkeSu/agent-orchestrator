@@ -13,6 +13,341 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const aggregateSessionRuntimeTiming = `-- name: AggregateSessionRuntimeTiming :one
+SELECT
+    CAST(COUNT(mue.id) AS INTEGER) AS step_count,
+    CAST(COUNT(timing.event_id) AS INTEGER) AS timing_row_count,
+    CAST(COUNT(DISTINCT CASE WHEN src.subagent_id = '' THEN src.id || ':' || timing.round_seq END) AS INTEGER) AS round_count,
+    CAST(COALESCE(SUM(timing.llm_ms), -1) AS INTEGER) AS llm_ms_total,
+    CAST(COALESCE(SUM(timing.tool_ms), -1) AS INTEGER) AS tool_ms_total,
+    CAST(COALESCE(SUM(timing.first_token_ms), -1) AS INTEGER) AS first_token_ms_sum,
+    CAST(COUNT(timing.first_token_ms) AS INTEGER) AS first_token_known,
+    CAST(COALESCE(SUM(CASE WHEN timing.llm_ms IS NOT NULL AND mue.output_tokens IS NOT NULL AND timing.llm_ms > 0 THEN mue.output_tokens END), -1) AS INTEGER) AS rate_output_tokens,
+    CAST(COALESCE(SUM(CASE WHEN timing.llm_ms IS NOT NULL AND mue.output_tokens IS NOT NULL AND timing.llm_ms > 0 THEN timing.llm_ms END), -1) AS INTEGER) AS rate_llm_ms
+FROM model_usage_events mue
+JOIN usage_bindings ub ON ub.id = mue.binding_id
+JOIN usage_sources src ON src.id = mue.usage_source_id
+LEFT JOIN model_usage_event_timing timing ON timing.event_id = mue.id
+WHERE ub.session_id = ?
+`
+
+type AggregateSessionRuntimeTimingRow struct {
+	StepCount        int64
+	TimingRowCount   int64
+	RoundCount       int64
+	LlmMsTotal       int64
+	ToolMsTotal      int64
+	FirstTokenMsSum  int64
+	FirstTokenKnown  int64
+	RateOutputTokens int64
+	RateLlmMs        int64
+}
+
+// Native/TUI-mode runtime statistics for one session (timing ADR #9): one
+// rollup over certified usage events with their timing rows LEFT JOINed.
+// StepCount counts every event (subagent sources included). RoundCount counts
+// distinct (root source, round) pairs: only root-generation sources
+// (subagent_id = ”) contribute rounds, so a session's rounds count user
+// exchanges, never agent-internal spawns. SUM() skips NULL durations, so a
+// session whose timing facts were never certified (pre-deployment ingestions,
+// a non-certified harness) returns NULL totals and the caller renders the
+// unknown marker, never a zero. RateOutputTokens/RateLLMMS are the
+// ratio-of-sums numerator and denominator for the session average output tok/s
+// (ADR Decision 3): only events carrying both a positive LLM elapsed and known
+// output tokens.
+func (q *Queries) AggregateSessionRuntimeTiming(ctx context.Context, sessionID domain.SessionID) (AggregateSessionRuntimeTimingRow, error) {
+	row := q.db.QueryRowContext(ctx, aggregateSessionRuntimeTiming, sessionID)
+	var i AggregateSessionRuntimeTimingRow
+	err := row.Scan(
+		&i.StepCount,
+		&i.TimingRowCount,
+		&i.RoundCount,
+		&i.LlmMsTotal,
+		&i.ToolMsTotal,
+		&i.FirstTokenMsSum,
+		&i.FirstTokenKnown,
+		&i.RateOutputTokens,
+		&i.RateLlmMs,
+	)
+	return i, err
+}
+
+const aggregateUsageByModel = `-- name: AggregateUsageByModel :many
+SELECT
+    mue.model_id AS group_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(mue.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(mue.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(mue.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(mue.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' THEN 1 END) AS INTEGER) AS observed_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' THEN 1 END) AS INTEGER) AS inferred_event_count,
+    CAST(COUNT(mue.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(mue.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(mue.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(mue.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(mue.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(mue.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM model_usage_events mue
+LEFT JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (?1 IS NULL OR mue.created_at >= ?1)
+  AND (?2 IS NULL OR mue.created_at <= ?2)
+  AND (?3 IS NULL OR us.kind = ?3)
+  AND (?4 IS NULL OR mue.model_id = ?4)
+GROUP BY mue.model_id
+ORDER BY mue.model_id
+`
+
+type AggregateUsageByModelParams struct {
+	From   interface{}
+	To     interface{}
+	Source interface{}
+	Model  interface{}
+}
+
+type AggregateUsageByModelRow struct {
+	GroupKey                      string
+	EventCount                    int64
+	InputTokens                   int64
+	KnownInputTokenCount          int64
+	CachedInputTokens             int64
+	KnownCachedInputTokenCount    int64
+	UncachedInputTokens           int64
+	KnownUncachedInputTokenCount  int64
+	OutputTokens                  int64
+	KnownOutputTokenCount         int64
+	PricedEventCount              int64
+	PricedTotalNanos              int64
+	ObservedCostEventCount        int64
+	InferredCostEventCount        int64
+	ObservedEventCount            int64
+	InferredEventCount            int64
+	KnownInputCount               int64
+	KnownInputNanos               int64
+	UnpricedKnownInputNanos       int64
+	KnownCachedInputCount         int64
+	KnownCachedInputNanos         int64
+	UnpricedKnownCachedInputNanos int64
+	KnownOutputCount              int64
+	KnownOutputNanos              int64
+	UnpricedKnownOutputNanos      int64
+}
+
+// Global per-model usage rollup over an optional created_at range with optional
+// source/model filters (the same optional filter params the summary accepts).
+// Every counter mirrors the summary aggregate per model: a summed metric is only
+// meaningful when every event in the group carried it, so the known_*_count
+// columns let the service drop any component that is not fully known. The
+// billing provider is a pricing input rather than a grouping key: a model stays
+// one row even when more than one provider served it.
+func (q *Queries) AggregateUsageByModel(ctx context.Context, arg AggregateUsageByModelParams) ([]AggregateUsageByModelRow, error) {
+	rows, err := q.db.QueryContext(ctx, aggregateUsageByModel,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AggregateUsageByModelRow{}
+	for rows.Next() {
+		var i AggregateUsageByModelRow
+		if err := rows.Scan(
+			&i.GroupKey,
+			&i.EventCount,
+			&i.InputTokens,
+			&i.KnownInputTokenCount,
+			&i.CachedInputTokens,
+			&i.KnownCachedInputTokenCount,
+			&i.UncachedInputTokens,
+			&i.KnownUncachedInputTokenCount,
+			&i.OutputTokens,
+			&i.KnownOutputTokenCount,
+			&i.PricedEventCount,
+			&i.PricedTotalNanos,
+			&i.ObservedCostEventCount,
+			&i.InferredCostEventCount,
+			&i.ObservedEventCount,
+			&i.InferredEventCount,
+			&i.KnownInputCount,
+			&i.KnownInputNanos,
+			&i.UnpricedKnownInputNanos,
+			&i.KnownCachedInputCount,
+			&i.KnownCachedInputNanos,
+			&i.UnpricedKnownCachedInputNanos,
+			&i.KnownOutputCount,
+			&i.KnownOutputNanos,
+			&i.UnpricedKnownOutputNanos,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const aggregateUsageByProvider = `-- name: AggregateUsageByProvider :many
+SELECT
+    COALESCE(mue.billing_provider_id, '') AS group_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(mue.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(mue.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(mue.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(mue.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' THEN 1 END) AS INTEGER) AS observed_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' THEN 1 END) AS INTEGER) AS inferred_event_count,
+    CAST(COUNT(mue.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(mue.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(mue.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(mue.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(mue.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(mue.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM model_usage_events mue
+LEFT JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (?1 IS NULL OR mue.created_at >= ?1)
+  AND (?2 IS NULL OR mue.created_at <= ?2)
+  AND (?3 IS NULL OR us.kind = ?3)
+  AND (?4 IS NULL OR mue.model_id = ?4)
+GROUP BY COALESCE(mue.billing_provider_id, '')
+ORDER BY COALESCE(mue.billing_provider_id, '')
+`
+
+type AggregateUsageByProviderParams struct {
+	From   interface{}
+	To     interface{}
+	Source interface{}
+	Model  interface{}
+}
+
+type AggregateUsageByProviderRow struct {
+	GroupKey                      string
+	EventCount                    int64
+	InputTokens                   int64
+	KnownInputTokenCount          int64
+	CachedInputTokens             int64
+	KnownCachedInputTokenCount    int64
+	UncachedInputTokens           int64
+	KnownUncachedInputTokenCount  int64
+	OutputTokens                  int64
+	KnownOutputTokenCount         int64
+	PricedEventCount              int64
+	PricedTotalNanos              int64
+	ObservedCostEventCount        int64
+	InferredCostEventCount        int64
+	ObservedEventCount            int64
+	InferredEventCount            int64
+	KnownInputCount               int64
+	KnownInputNanos               int64
+	UnpricedKnownInputNanos       int64
+	KnownCachedInputCount         int64
+	KnownCachedInputNanos         int64
+	UnpricedKnownCachedInputNanos int64
+	KnownOutputCount              int64
+	KnownOutputNanos              int64
+	UnpricedKnownOutputNanos      int64
+}
+
+// Global per-billing-provider usage rollup over an optional created_at range
+// with optional source/model filters (the same optional filter params the
+// summary accepts). Events without a billing provider attribution
+// (billing_provider_id IS NULL) group into the empty-string bucket so request
+// counts and token totals never silently vanish from the provider view.
+func (q *Queries) AggregateUsageByProvider(ctx context.Context, arg AggregateUsageByProviderParams) ([]AggregateUsageByProviderRow, error) {
+	rows, err := q.db.QueryContext(ctx, aggregateUsageByProvider,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AggregateUsageByProviderRow{}
+	for rows.Next() {
+		var i AggregateUsageByProviderRow
+		if err := rows.Scan(
+			&i.GroupKey,
+			&i.EventCount,
+			&i.InputTokens,
+			&i.KnownInputTokenCount,
+			&i.CachedInputTokens,
+			&i.KnownCachedInputTokenCount,
+			&i.UncachedInputTokens,
+			&i.KnownUncachedInputTokenCount,
+			&i.OutputTokens,
+			&i.KnownOutputTokenCount,
+			&i.PricedEventCount,
+			&i.PricedTotalNanos,
+			&i.ObservedCostEventCount,
+			&i.InferredCostEventCount,
+			&i.ObservedEventCount,
+			&i.InferredEventCount,
+			&i.KnownInputCount,
+			&i.KnownInputNanos,
+			&i.UnpricedKnownInputNanos,
+			&i.KnownCachedInputCount,
+			&i.KnownCachedInputNanos,
+			&i.UnpricedKnownCachedInputNanos,
+			&i.KnownOutputCount,
+			&i.KnownOutputNanos,
+			&i.UnpricedKnownOutputNanos,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const aggregateUsageBySessionHarnessModel = `-- name: AggregateUsageBySessionHarnessModel :many
 SELECT
     ub.harness,
@@ -95,6 +430,275 @@ func (q *Queries) AggregateUsageBySessionHarnessModel(ctx context.Context, sessi
 		if err := rows.Scan(
 			&i.Harness,
 			&i.ModelID,
+			&i.EventCount,
+			&i.InputTokens,
+			&i.KnownInputTokenCount,
+			&i.CachedInputTokens,
+			&i.KnownCachedInputTokenCount,
+			&i.UncachedInputTokens,
+			&i.KnownUncachedInputTokenCount,
+			&i.OutputTokens,
+			&i.KnownOutputTokenCount,
+			&i.PricedEventCount,
+			&i.PricedTotalNanos,
+			&i.ObservedCostEventCount,
+			&i.InferredCostEventCount,
+			&i.KnownInputCount,
+			&i.KnownInputNanos,
+			&i.UnpricedKnownInputNanos,
+			&i.KnownCachedInputCount,
+			&i.KnownCachedInputNanos,
+			&i.UnpricedKnownCachedInputNanos,
+			&i.KnownOutputCount,
+			&i.KnownOutputNanos,
+			&i.UnpricedKnownOutputNanos,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const aggregateUsageSummary = `-- name: AggregateUsageSummary :one
+SELECT
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(mue.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(mue.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(mue.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(mue.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(mue.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(mue.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(mue.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(mue.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(mue.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(mue.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM model_usage_events mue
+WHERE (?1 IS NULL OR mue.created_at >= ?1)
+  AND (?2 IS NULL OR mue.created_at <= ?2)
+  AND (?3 IS NULL OR EXISTS (
+      SELECT 1
+      FROM usage_sources us
+      WHERE us.id = mue.usage_source_id
+        AND us.kind = ?3
+  ))
+  AND (?4 IS NULL OR mue.model_id = ?4)
+`
+
+type AggregateUsageSummaryParams struct {
+	From   interface{}
+	To     interface{}
+	Source interface{}
+	Model  interface{}
+}
+
+type AggregateUsageSummaryRow struct {
+	EventCount                    int64
+	InputTokens                   int64
+	KnownInputTokenCount          int64
+	CachedInputTokens             int64
+	KnownCachedInputTokenCount    int64
+	UncachedInputTokens           int64
+	KnownUncachedInputTokenCount  int64
+	OutputTokens                  int64
+	KnownOutputTokenCount         int64
+	PricedEventCount              int64
+	PricedTotalNanos              int64
+	ObservedCostEventCount        int64
+	InferredCostEventCount        int64
+	KnownInputCount               int64
+	KnownInputNanos               int64
+	UnpricedKnownInputNanos       int64
+	KnownCachedInputCount         int64
+	KnownCachedInputNanos         int64
+	UnpricedKnownCachedInputNanos int64
+	KnownOutputCount              int64
+	KnownOutputNanos              int64
+	UnpricedKnownOutputNanos      int64
+}
+
+// Global (cross-session) usage summary over an optional created_at range. The
+// from/to bounds are inclusive; passing NULL for either omits that bound. The
+// optional source kind and model id filters are exact matches; passing NULL for
+// either omits that filter. Every counter mirrors the per-session aggregate: a
+// summed metric is only meaningful when every event in the scope carried it, so
+// the known_*_count columns let the service drop any component that is not
+// fully known.
+func (q *Queries) AggregateUsageSummary(ctx context.Context, arg AggregateUsageSummaryParams) (AggregateUsageSummaryRow, error) {
+	row := q.db.QueryRowContext(ctx, aggregateUsageSummary,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+	)
+	var i AggregateUsageSummaryRow
+	err := row.Scan(
+		&i.EventCount,
+		&i.InputTokens,
+		&i.KnownInputTokenCount,
+		&i.CachedInputTokens,
+		&i.KnownCachedInputTokenCount,
+		&i.UncachedInputTokens,
+		&i.KnownUncachedInputTokenCount,
+		&i.OutputTokens,
+		&i.KnownOutputTokenCount,
+		&i.PricedEventCount,
+		&i.PricedTotalNanos,
+		&i.ObservedCostEventCount,
+		&i.InferredCostEventCount,
+		&i.KnownInputCount,
+		&i.KnownInputNanos,
+		&i.UnpricedKnownInputNanos,
+		&i.KnownCachedInputCount,
+		&i.KnownCachedInputNanos,
+		&i.UnpricedKnownCachedInputNanos,
+		&i.KnownOutputCount,
+		&i.KnownOutputNanos,
+		&i.UnpricedKnownOutputNanos,
+	)
+	return i, err
+}
+
+const aggregateUsageTrend = `-- name: AggregateUsageTrend :many
+SELECT
+    bucket_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(rows.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(rows.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(rows.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(rows.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(rows.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(rows.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(rows.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(rows.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(rows.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(rows.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN rows.billing_provider_source = 'observed' AND (
+        rows.estimated_cost_nanos IS NOT NULL OR rows.input_cost_nanos IS NOT NULL OR
+        rows.cached_input_cost_nanos IS NOT NULL OR rows.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN rows.billing_provider_source = 'inferred' AND (
+        rows.estimated_cost_nanos IS NOT NULL OR rows.input_cost_nanos IS NOT NULL OR
+        rows.cached_input_cost_nanos IS NOT NULL OR rows.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(rows.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(rows.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(rows.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(rows.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(rows.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(rows.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM (
+    SELECT
+        unixepoch(substr(mue.created_at, 1, 19)) / CAST(?1 AS INTEGER) AS bucket_key,
+        mue.input_tokens,
+        mue.cached_input_tokens,
+        mue.uncached_input_tokens,
+        mue.output_tokens,
+        mue.estimated_cost_nanos,
+        mue.billing_provider_source,
+        mue.input_cost_nanos,
+        mue.cached_input_cost_nanos,
+        mue.output_cost_nanos
+    FROM model_usage_events mue
+    JOIN usage_sources us ON us.id = mue.usage_source_id
+    WHERE mue.created_at IS NOT NULL
+      AND (?2 IS NULL OR mue.created_at >= ?2)
+      AND (?3 IS NULL OR mue.created_at <= ?3)
+      AND (?4 IS NULL OR us.kind = ?4)
+      AND (?5 IS NULL OR mue.model_id = ?5)
+) rows
+GROUP BY 1
+ORDER BY 1
+`
+
+type AggregateUsageTrendParams struct {
+	BucketSeconds int64
+	From          interface{}
+	To            interface{}
+	Source        interface{}
+	Model         interface{}
+}
+
+type AggregateUsageTrendRow struct {
+	BucketKey                     int64
+	EventCount                    int64
+	InputTokens                   int64
+	KnownInputTokenCount          int64
+	CachedInputTokens             int64
+	KnownCachedInputTokenCount    int64
+	UncachedInputTokens           int64
+	KnownUncachedInputTokenCount  int64
+	OutputTokens                  int64
+	KnownOutputTokenCount         int64
+	PricedEventCount              int64
+	PricedTotalNanos              int64
+	ObservedCostEventCount        int64
+	InferredCostEventCount        int64
+	KnownInputCount               int64
+	KnownInputNanos               int64
+	UnpricedKnownInputNanos       int64
+	KnownCachedInputCount         int64
+	KnownCachedInputNanos         int64
+	UnpricedKnownCachedInputNanos int64
+	KnownOutputCount              int64
+	KnownOutputNanos              int64
+	UnpricedKnownOutputNanos      int64
+}
+
+// Cross-session usage bucketed by UTC-aligned created_at intervals (hour or
+// day). Every counter mirrors the global summary aggregate: a summed metric is
+// only meaningful when every event in the bucket carried it, so the
+// known_*_count columns let the service drop any component that is not fully
+// known. The optional source filter matches the usage source kind that
+// produced the event; the optional model filter matches the model id exactly.
+// Events without a created_at cannot be placed in a bucket and are excluded.
+// Bucket keys are unix epoch divided by the bucket width in seconds (3600 for
+// hour, 86400 for day): the driver stores TIMESTAMP as a UTC text the SQLite
+// date functions cannot parse, so the key is derived from its fixed prefix
+// instead of strftime.
+func (q *Queries) AggregateUsageTrend(ctx context.Context, arg AggregateUsageTrendParams) ([]AggregateUsageTrendRow, error) {
+	rows, err := q.db.QueryContext(ctx, aggregateUsageTrend,
+		arg.BucketSeconds,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AggregateUsageTrendRow{}
+	for rows.Next() {
+		var i AggregateUsageTrendRow
+		if err := rows.Scan(
+			&i.BucketKey,
 			&i.EventCount,
 			&i.InputTokens,
 			&i.KnownInputTokenCount,
@@ -768,6 +1372,171 @@ func (q *Queries) ListCompactSessionUsage(ctx context.Context, projectID interfa
 	return items, nil
 }
 
+const listConversationRuntimeContentRows = `-- name: ListConversationRuntimeContentRows :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.session_id = ?1
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT
+    'message' AS row_kind,
+    conversation_messages.turn_id AS turn_id,
+    CAST(conversation_messages.role AS TEXT) AS role,
+    CAST(conversation_messages.origin AS TEXT) AS origin,
+    '' AS status,
+    conversation_messages.created_at AS created_at,
+    conversation_messages.updated_at AS updated_at
+FROM conversation_messages
+JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
+WHERE conversation_messages.conversation_id IN (SELECT conversations.id FROM conversations WHERE conversations.session_id = ?1)
+  AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
+UNION ALL
+SELECT
+    'activity' AS row_kind,
+    conversation_activities.turn_id AS turn_id,
+    '' AS role,
+    '' AS origin,
+    CAST(conversation_activities.status AS TEXT) AS status,
+    conversation_activities.created_at AS created_at,
+    conversation_activities.updated_at AS updated_at
+FROM conversation_activities
+JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
+WHERE conversation_activities.conversation_id IN (SELECT conversations.id FROM conversations WHERE conversations.session_id = ?1)
+  AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
+ORDER BY created_at
+`
+
+type ListConversationRuntimeContentRowsRow struct {
+	RowKind   string
+	TurnID    sql.NullString
+	Role      string
+	Origin    string
+	Status    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Chat-mode runtime statistics content rows (timing ADR #9): every timeline
+// item of the session's conversation on the active lineage, unified across
+// messages and activities so the store can derive per-turn first-content,
+// tool elapsed, and step counts with full timestamp precision (the driver's
+// stored text format is not parseable by SQLite date functions). Rows with a
+// NULL turn_id are dropped by the caller: only turn-attributed work counts.
+func (q *Queries) ListConversationRuntimeContentRows(ctx context.Context, sessionID *domain.SessionID) ([]ListConversationRuntimeContentRowsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listConversationRuntimeContentRows, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConversationRuntimeContentRowsRow{}
+	for rows.Next() {
+		var i ListConversationRuntimeContentRowsRow
+		if err := rows.Scan(
+			&i.RowKind,
+			&i.TurnID,
+			&i.Role,
+			&i.Origin,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConversationRuntimeTurnFacts = `-- name: ListConversationRuntimeTurnFacts :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.session_id = ?1
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT
+    turn.id AS turn_id,
+    turn.state AS state,
+    turn.requested_at AS requested_at,
+    turn.started_at AS started_at,
+    turn.completed_at AS completed_at
+FROM conversation_turns turn
+JOIN active_path AS path ON path.branch_id = turn.branch_id
+WHERE turn.conversation_id IN (SELECT conversations.id FROM conversations WHERE conversations.session_id = ?1)
+  AND turn.promoted_to_turn_id IS NULL
+  AND turn.rolled_back_at IS NULL
+  AND turn.state <> 'cancelled'
+ORDER BY turn.requested_at, turn.rowid
+`
+
+type ListConversationRuntimeTurnFactsRow struct {
+	TurnID      string
+	State       domain.TurnState
+	RequestedAt time.Time
+	StartedAt   sql.NullTime
+	CompletedAt sql.NullTime
+}
+
+// Chat-mode runtime statistics (timing ADR #9): one row per conversation turn
+// on the session's active branch lineage. Turns are restricted to the session's
+// own conversation and to the active lineage the timeline shows (rolled-back,
+// promoted, and cancelled turns are discarded); daemon-only turns (compaction,
+// provider-adopted resumes) carry no prompt. The store pairs these rows with
+// ListConversationRuntimeContentRows to derive the per-turn facts.
+func (q *Queries) ListConversationRuntimeTurnFacts(ctx context.Context, sessionID *domain.SessionID) ([]ListConversationRuntimeTurnFactsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listConversationRuntimeTurnFacts, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConversationRuntimeTurnFactsRow{}
+	for rows.Next() {
+		var i ListConversationRuntimeTurnFactsRow
+		if err := rows.Scan(
+			&i.TurnID,
+			&i.State,
+			&i.RequestedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLatestRetiredCodexReplacementClaimsByPath = `-- name: ListLatestRetiredCodexReplacementClaimsByPath :many
 SELECT us.id, us.binding_id, us.kind, us.native_session_id, us.subagent_id, us.artifact_path, us.file_identity, us.generation, us.byte_offset, us.parser_state_json, us.state, us.failure_count, us.anomaly_count, us.next_retry_at, us.last_error_code, us.updated_at
 FROM usage_bindings ub
@@ -931,6 +1700,75 @@ func (q *Queries) ListLegacyUsageSourceIDs(ctx context.Context) ([]int64, error)
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listModelUsageEventTiming = `-- name: ListModelUsageEventTiming :many
+SELECT
+    mue.id AS event_id,
+    mue.binding_id,
+    mue.created_at,
+    mue.source_event_key,
+    timing.round_seq,
+    timing.llm_ms,
+    timing.tool_ms,
+    timing.first_token_ms
+FROM model_usage_events mue
+LEFT JOIN model_usage_event_timing timing ON timing.event_id = mue.id
+WHERE (?1 IS NULL OR mue.created_at >= ?1)
+  AND (?2 IS NULL OR mue.created_at <= ?2)
+ORDER BY mue.id DESC
+`
+
+type ListModelUsageEventTimingParams struct {
+	From interface{}
+	To   interface{}
+}
+
+type ListModelUsageEventTimingRow struct {
+	EventID        int64
+	BindingID      int64
+	CreatedAt      sql.NullTime
+	SourceEventKey string
+	RoundSeq       sql.NullInt64
+	LlmMs          sql.NullInt64
+	ToolMs         sql.NullInt64
+	FirstTokenMs   sql.NullInt64
+}
+
+// Request-log read model: every usage event in the range with its timing row
+// LEFT JOINed. Events without a timing row (pre-timing ingestions, or a source
+// whose timing facts were never certified) come back with NULL durations and a
+// zero round_seq; the caller renders the unknown marker, never a zero.
+func (q *Queries) ListModelUsageEventTiming(ctx context.Context, arg ListModelUsageEventTimingParams) ([]ListModelUsageEventTimingRow, error) {
+	rows, err := q.db.QueryContext(ctx, listModelUsageEventTiming, arg.From, arg.To)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListModelUsageEventTimingRow{}
+	for rows.Next() {
+		var i ListModelUsageEventTimingRow
+		if err := rows.Scan(
+			&i.EventID,
+			&i.BindingID,
+			&i.CreatedAt,
+			&i.SourceEventKey,
+			&i.RoundSeq,
+			&i.LlmMs,
+			&i.ToolMs,
+			&i.FirstTokenMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -1199,6 +2037,118 @@ func (q *Queries) ListUsageDiscoveryBindings(ctx context.Context, limit int64) (
 	return items, nil
 }
 
+const listUsageRequestLog = `-- name: ListUsageRequestLog :many
+SELECT
+    event.id,
+    event.created_at,
+    event.billing_provider_id,
+    event.model_id,
+    event.input_tokens,
+    event.cached_input_tokens,
+    event.output_tokens,
+    event.estimated_cost_nanos,
+    source.kind AS source_kind,
+    binding.session_id,
+    timing.llm_ms AS llm_ms,
+    timing.first_token_ms AS first_token_ms,
+    CAST(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS INTEGER) AS session_exists
+FROM model_usage_events event
+JOIN usage_sources source ON source.id = event.usage_source_id
+JOIN usage_bindings binding ON binding.id = event.binding_id
+LEFT JOIN sessions s ON s.id = binding.session_id
+LEFT JOIN model_usage_event_timing timing ON timing.event_id = event.id
+WHERE (?1 IS NULL OR event.created_at >= ?1)
+  AND (?2 IS NULL OR event.created_at <= ?2)
+  AND (?3 IS NULL OR source.kind = ?3)
+  AND (?4 IS NULL OR event.model_id = ?4)
+  AND (?5 IS NULL OR event.id < ?5)
+ORDER BY event.id DESC
+LIMIT ?6
+`
+
+type ListUsageRequestLogParams struct {
+	From     interface{}
+	To       interface{}
+	Source   interface{}
+	Model    interface{}
+	BeforeID interface{}
+	Limit    int64
+}
+
+type ListUsageRequestLogRow struct {
+	ID                 int64
+	CreatedAt          sql.NullTime
+	BillingProviderID  sql.NullString
+	ModelID            string
+	InputTokens        sql.NullInt64
+	CachedInputTokens  sql.NullInt64
+	OutputTokens       sql.NullInt64
+	EstimatedCostNanos sql.NullInt64
+	SourceKind         domain.UsageSourceKind
+	SessionID          domain.SessionID
+	LlmMs              sql.NullInt64
+	FirstTokenMs       sql.NullInt64
+	SessionExists      int64
+}
+
+// Newest-first, bounded page of normalized usage events over an optional
+// created_at range and optional exact source kind / model id filters, plus a
+// keyset cursor. The caller requests limit+1 rows to detect whether another
+// page exists, then truncates to limit. Ordering is by event id descending,
+// which is monotonic with insertion, NULL-safe (created_at is nullable and can
+// be backfilled out of timestamp order), and stable: the before cursor filters
+// by id, so a page never shifts as newer events are appended and no row can
+// vanish or repeat between pages.
+//
+// The timing join is nil-preserving (Decision 2/3 of the timing ADR): events
+// without a timing row (pre-deployment history, uncertified boundaries) keep
+// NULL llm_ms/first_token_ms, which the caller renders as the unknown marker,
+// never zero. The join is 1:1 (timing.event_id is the primary key), so it
+// cannot multiply rows or disturb the id keyset paging.
+func (q *Queries) ListUsageRequestLog(ctx context.Context, arg ListUsageRequestLogParams) ([]ListUsageRequestLogRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUsageRequestLog,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+		arg.BeforeID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUsageRequestLogRow{}
+	for rows.Next() {
+		var i ListUsageRequestLogRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.BillingProviderID,
+			&i.ModelID,
+			&i.InputTokens,
+			&i.CachedInputTokens,
+			&i.OutputTokens,
+			&i.EstimatedCostNanos,
+			&i.SourceKind,
+			&i.SessionID,
+			&i.LlmMs,
+			&i.FirstTokenMs,
+			&i.SessionExists,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsageSourcesForBinding = `-- name: ListUsageSourcesForBinding :many
 SELECT id, binding_id, kind, native_session_id, subagent_id, artifact_path, file_identity, generation, byte_offset, parser_state_json, state, failure_count, anomaly_count, next_retry_at, last_error_code, updated_at
 FROM usage_sources
@@ -1233,6 +2183,65 @@ func (q *Queries) ListUsageSourcesForBinding(ctx context.Context, bindingID int6
 			&i.LastErrorCode,
 			&i.UpdatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsageSummaryDimensions = `-- name: ListUsageSummaryDimensions :many
+SELECT DISTINCT
+    us.kind AS source_kind,
+    mue.model_id
+FROM model_usage_events mue
+JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (?1 IS NULL OR mue.created_at >= ?1)
+  AND (?2 IS NULL OR mue.created_at <= ?2)
+  AND (?3 IS NULL OR us.kind = ?3)
+  AND (?4 IS NULL OR mue.model_id = ?4)
+ORDER BY us.kind, mue.model_id
+`
+
+type ListUsageSummaryDimensionsParams struct {
+	From   interface{}
+	To     interface{}
+	Source interface{}
+	Model  interface{}
+}
+
+type ListUsageSummaryDimensionsRow struct {
+	SourceKind domain.UsageSourceKind
+	ModelID    string
+}
+
+// Distinct (usage source kind, model id) pairs present in the summary scope.
+// The scope is the same range and optional source/model filters the summary
+// endpoint applies, so dropdown options stay meaningful: choosing a source
+// narrows the model options to models that actually carry events from that
+// source. Events without a durable source row cannot be filtered by source and
+// so are excluded here.
+func (q *Queries) ListUsageSummaryDimensions(ctx context.Context, arg ListUsageSummaryDimensionsParams) ([]ListUsageSummaryDimensionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUsageSummaryDimensions,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUsageSummaryDimensionsRow{}
+	for rows.Next() {
+		var i ListUsageSummaryDimensionsRow
+		if err := rows.Scan(&i.SourceKind, &i.ModelID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1698,6 +2707,47 @@ func (q *Queries) UpdateUsageSourceLifecycle(ctx context.Context, arg UpdateUsag
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const upsertModelUsageEventTiming = `-- name: UpsertModelUsageEventTiming :one
+INSERT INTO model_usage_event_timing (
+    event_id, round_seq, llm_ms, tool_ms, first_token_ms, created_at
+) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (event_id) DO UPDATE SET
+    round_seq      = excluded.round_seq,
+    llm_ms         = excluded.llm_ms,
+    tool_ms        = excluded.tool_ms,
+    first_token_ms = excluded.first_token_ms,
+    created_at     = excluded.created_at
+RETURNING event_id
+`
+
+type UpsertModelUsageEventTimingParams struct {
+	EventID      int64
+	RoundSeq     int64
+	LlmMs        sql.NullInt64
+	ToolMs       sql.NullInt64
+	FirstTokenMs sql.NullInt64
+	CreatedAt    time.Time
+}
+
+// One timing row per model_usage_events.id (Decision 2 of the timing ADR).
+// Written atomically with its event inside ApplyUsageChunk: an INSERT for a
+// newly written event, and an upsert when a replayed/replacement generation
+// re-derives the same logical event (the parent row identity does not change
+// across a rehome, so the timing row is refreshed in place).
+func (q *Queries) UpsertModelUsageEventTiming(ctx context.Context, arg UpsertModelUsageEventTimingParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, upsertModelUsageEventTiming,
+		arg.EventID,
+		arg.RoundSeq,
+		arg.LlmMs,
+		arg.ToolMs,
+		arg.FirstTokenMs,
+		arg.CreatedAt,
+	)
+	var event_id int64
+	err := row.Scan(&event_id)
+	return event_id, err
 }
 
 const upsertUsageBinding = `-- name: UpsertUsageBinding :one

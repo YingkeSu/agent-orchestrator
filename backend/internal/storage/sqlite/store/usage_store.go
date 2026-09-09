@@ -353,14 +353,16 @@ func (s *Store) MarkUsageSourceFailure(ctx context.Context, id, failureCount int
 	return n > 0, nil
 }
 
-// ApplyUsageChunk atomically writes parsed usage events and advances the source
-// cursor/baselines. The cursor never moves unless all event writes commit.
+// ApplyUsageChunk atomically writes parsed usage events (and their timing
+// facts) and advances the source cursor/baselines. The cursor never moves
+// unless all event writes commit.
 func (s *Store) ApplyUsageChunk(
 	ctx context.Context,
 	sourceID, expectedOffset int64,
 	expectedRevision time.Time,
 	nextState domain.SourceCursorState,
 	events []domain.ModelUsageEvent,
+	timing []domain.UsageEventTiming,
 ) error {
 	if nextState.ParserStateJSON != "" {
 		if err := validateParserStateObject(nextState.ParserStateJSON); err != nil {
@@ -384,6 +386,22 @@ func (s *Store) ApplyUsageChunk(
 		if !source.SourceUpdatedAt.Equal(expectedRevision) ||
 			(source.SourceState == domain.UsageSourceComplete && source.SourceLastErrorCode == domain.UsageErrorArtifactReplaced) {
 			return fmt.Errorf("%w: source %d changed while its chunk was being read", domain.ErrUsageSourceRevisionConflict, sourceID)
+		}
+		timingByKey := make(map[string]domain.UsageEventTiming, len(timing))
+		for _, entry := range timing {
+			timingByKey[entry.SourceEventKey] = entry
+		}
+		appliedTiming := make(map[string]bool, len(timing))
+		upsertTiming := func(eventID int64, entry domain.UsageEventTiming) error {
+			_, err := q.UpsertModelUsageEventTiming(ctx, gen.UpsertModelUsageEventTimingParams{
+				EventID:      eventID,
+				RoundSeq:     entry.RoundSeq,
+				LlmMs:        ptrInt64ToNull(entry.LLMMS),
+				ToolMs:       ptrInt64ToNull(entry.ToolMS),
+				FirstTokenMs: ptrInt64ToNull(entry.FirstTokenMS),
+				CreatedAt:    timeOrNow(nextState.UpdatedAt),
+			})
+			return err
 		}
 		insertedEvent := false
 		for _, ev := range events {
@@ -420,6 +438,15 @@ func (s *Store) ApplyUsageChunk(
 						return err
 					}
 				}
+				// A replacement generation re-derives the same logical event
+				// with (possibly changed) timing facts; refresh the child row
+				// to match the new certified generation.
+				if entry, ok := timingByKey[ev.SourceEventKey]; ok {
+					if err := upsertTiming(existing.ID, entry); err != nil {
+						return err
+					}
+					appliedTiming[ev.SourceEventKey] = true
+				}
 				if promoteAttribution {
 					rows, err := q.PromoteInferredUsageEventToObserved(ctx, gen.PromoteInferredUsageEventToObservedParams{
 						BillingProviderID:         stringOrNull(ev.BillingProviderID),
@@ -455,10 +482,38 @@ func (s *Store) ApplyUsageChunk(
 				}
 				continue
 			}
-			if _, err := q.InsertModelUsageEvent(ctx, usageEventInsertParams(source, ev)); err != nil {
+			eventID, err := q.InsertModelUsageEvent(ctx, usageEventInsertParams(source, ev))
+			if err != nil {
 				return err
 			}
+			if entry, ok := timingByKey[ev.SourceEventKey]; ok {
+				if err := upsertTiming(eventID, entry); err != nil {
+					return err
+				}
+				appliedTiming[ev.SourceEventKey] = true
+			}
 			insertedEvent = true
+		}
+		// Timing facts whose event was committed in an earlier chunk (a tool
+		// elapsed closed by a tool_result that arrived later, or a Codex
+		// first-token closed by a response item) refresh the stored child row.
+		for key, entry := range timingByKey {
+			if appliedTiming[key] {
+				continue
+			}
+			existing, err := q.GetModelUsageEventByKey(ctx, gen.GetModelUsageEventByKeyParams{
+				BindingID:      source.BindingID,
+				SourceEventKey: key,
+			})
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if err := upsertTiming(existing.ID, entry); err != nil {
+				return err
+			}
 		}
 		if err := q.UpdateUsageSourceCursor(ctx, gen.UpdateUsageSourceCursorParams{
 			ID:              sourceID,
@@ -781,6 +836,209 @@ func (s *Store) ListCompactSessionUsageAggregates(ctx context.Context, projectID
 			SessionID:       row.SessionID,
 			ProcessedTokens: int64PtrWhen(row.ProcessedTokens, row.ProcessedTokensKnown != 0),
 			Incomplete:      row.Incomplete != 0,
+			Cost: domain.UsageCostAggregate{
+				EventCount: row.EventCount, PricedEventCount: row.PricedEventCount, PricedTotalNanos: row.PricedTotalNanos,
+				ObservedCostEventCount: row.ObservedCostEventCount, InferredCostEventCount: row.InferredCostEventCount,
+				KnownInputCount: row.KnownInputCount, KnownInputNanos: row.KnownInputNanos,
+				UnpricedKnownInputNanos: row.UnpricedKnownInputNanos,
+				KnownCachedInputCount:   row.KnownCachedInputCount, KnownCachedInputNanos: row.KnownCachedInputNanos,
+				UnpricedKnownCachedInputNanos: row.UnpricedKnownCachedInputNanos,
+				KnownOutputCount:              row.KnownOutputCount, KnownOutputNanos: row.KnownOutputNanos,
+				UnpricedKnownOutputNanos: row.UnpricedKnownOutputNanos,
+			},
+		})
+	}
+	return out, nil
+}
+
+// ListUsageRequestLog returns one newest-first page of normalized usage events
+// over an optional created_at range, optional exact source kind / model id
+// filters, and a keyset cursor. limit is the requested page size; the store
+// requests limit+1 rows so the caller can tell whether another page exists. A
+// nil beforeID means the first (newest) page. Ordering is by event id
+// descending so paging is stable even when created_at is NULL or backfilled out
+// of timestamp order.
+func (s *Store) ListUsageRequestLog(
+	ctx context.Context,
+	from, to *time.Time,
+	source, model string,
+	beforeID *int64,
+	limit int64,
+) ([]domain.UsageRequestLogEntry, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	rows, err := s.qr.ListUsageRequestLog(ctx, gen.ListUsageRequestLogParams{
+		From:     ptrTimeToNullTime(from),
+		To:       ptrTimeToNullTime(to),
+		Source:   stringOrNull(source),
+		Model:    stringOrNull(model),
+		BeforeID: sql.NullInt64{Int64: int64OrZero(beforeID), Valid: beforeID != nil},
+		Limit:    limit + 1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list usage request log: %w", err)
+	}
+	out := make([]domain.UsageRequestLogEntry, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.UsageRequestLogEntry{
+			ID:                 row.ID,
+			CreatedAt:          nullableTime(row.CreatedAt),
+			BillingProviderID:  row.BillingProviderID.String,
+			ModelID:            row.ModelID,
+			InputTokens:        nullInt64Ptr(row.InputTokens),
+			CachedInputTokens:  nullInt64Ptr(row.CachedInputTokens),
+			OutputTokens:       nullInt64Ptr(row.OutputTokens),
+			EstimatedCostNanos: nullInt64Ptr(row.EstimatedCostNanos),
+			LLMMS:              nullInt64Ptr(row.LlmMs),
+			FirstTokenMS:       nullInt64Ptr(row.FirstTokenMs),
+			SourceKind:         row.SourceKind,
+			SessionID:          row.SessionID,
+			SessionExists:      row.SessionExists != 0,
+		})
+	}
+	return out, nil
+}
+
+func int64OrZero(v *int64) int64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func nullableTime(t sql.NullTime) *time.Time {
+	if !t.Valid {
+		return nil
+	}
+	value := t.Time
+	return &value
+}
+
+// AggregateUsageSummary returns the global cross-session usage aggregate over an
+// optional created_at range. A nil bound omits that side of the range. The
+// optional source kind and model id filters are exact matches; an empty string
+// omits that filter.
+func (s *Store) AggregateUsageSummary(ctx context.Context, from, to *time.Time, source, model string) (domain.GlobalUsageAggregate, error) {
+	row, err := s.qr.AggregateUsageSummary(ctx, gen.AggregateUsageSummaryParams{
+		From:   ptrTimeToNullTime(from),
+		To:     ptrTimeToNullTime(to),
+		Source: stringOrNull(source),
+		Model:  stringOrNull(model),
+	})
+	if err != nil {
+		return domain.GlobalUsageAggregate{}, fmt.Errorf("aggregate global usage summary: %w", err)
+	}
+	return domain.GlobalUsageAggregate{
+		EventCount: row.EventCount,
+		Tokens: domain.UsageTokenMetrics{
+			InputTokens:         int64PtrWhen(row.InputTokens, row.KnownInputTokenCount == row.EventCount),
+			CachedInputTokens:   int64PtrWhen(row.CachedInputTokens, row.KnownCachedInputTokenCount == row.EventCount),
+			UncachedInputTokens: int64PtrWhen(row.UncachedInputTokens, row.KnownUncachedInputTokenCount == row.EventCount),
+			OutputTokens:        int64PtrWhen(row.OutputTokens, row.KnownOutputTokenCount == row.EventCount),
+		},
+		Cost: domain.UsageCostAggregate{
+			EventCount: row.EventCount, PricedEventCount: row.PricedEventCount, PricedTotalNanos: row.PricedTotalNanos,
+			ObservedCostEventCount: row.ObservedCostEventCount, InferredCostEventCount: row.InferredCostEventCount,
+			KnownInputCount: row.KnownInputCount, KnownInputNanos: row.KnownInputNanos,
+			UnpricedKnownInputNanos: row.UnpricedKnownInputNanos,
+			KnownCachedInputCount:   row.KnownCachedInputCount, KnownCachedInputNanos: row.KnownCachedInputNanos,
+			UnpricedKnownCachedInputNanos: row.UnpricedKnownCachedInputNanos,
+			KnownOutputCount:              row.KnownOutputCount, KnownOutputNanos: row.KnownOutputNanos,
+			UnpricedKnownOutputNanos: row.UnpricedKnownOutputNanos,
+		},
+	}, nil
+}
+
+// ListUsageSummaryDimensions returns the distinct usage source kinds and model
+// ids in the same filtered scope the summary aggregate uses, for dropdown
+// options. Sources are ordered by kind and models by model id.
+func (s *Store) ListUsageSummaryDimensions(ctx context.Context, from, to *time.Time, source, model string) (domain.UsageSummaryDimensions, error) {
+	rows, err := s.qr.ListUsageSummaryDimensions(ctx, gen.ListUsageSummaryDimensionsParams{
+		From:   ptrTimeToNullTime(from),
+		To:     ptrTimeToNullTime(to),
+		Source: stringOrNull(source),
+		Model:  stringOrNull(model),
+	})
+	if err != nil {
+		return domain.UsageSummaryDimensions{}, fmt.Errorf("list usage summary dimensions: %w", err)
+	}
+	var dims domain.UsageSummaryDimensions
+	seenSources := make(map[domain.UsageSourceKind]struct{}, len(rows))
+	seenModels := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if _, seen := seenSources[row.SourceKind]; !seen {
+			dims.Sources = append(dims.Sources, row.SourceKind)
+			seenSources[row.SourceKind] = struct{}{}
+		}
+		if _, seen := seenModels[row.ModelID]; !seen {
+			dims.Models = append(dims.Models, row.ModelID)
+			seenModels[row.ModelID] = struct{}{}
+		}
+	}
+	return dims, nil
+}
+
+// ListModelUsageEventTiming returns usage events in the optional created_at
+// range with their timing rows LEFT JOINed, newest-first. Events whose timing
+// facts were never certified come back with RoundSeq 0 and nil durations; the
+// request log renders those as the unknown marker, never as zero.
+func (s *Store) ListModelUsageEventTiming(ctx context.Context, from, to *time.Time) ([]domain.UsageEventTimingRow, error) {
+	rows, err := s.qr.ListModelUsageEventTiming(ctx, gen.ListModelUsageEventTimingParams{
+		From: ptrTimeToNullTime(from),
+		To:   ptrTimeToNullTime(to),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list model usage event timing: %w", err)
+	}
+	out := make([]domain.UsageEventTimingRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.UsageEventTimingRow{
+			EventID:        row.EventID,
+			BindingID:      row.BindingID,
+			CreatedAt:      row.CreatedAt.Time,
+			SourceEventKey: row.SourceEventKey,
+			RoundSeq:       row.RoundSeq.Int64,
+			LLMMS:          nullInt64Ptr(row.LlmMs),
+			ToolMS:         nullInt64Ptr(row.ToolMs),
+			FirstTokenMS:   nullInt64Ptr(row.FirstTokenMs),
+		})
+	}
+	return out, nil
+}
+
+// AggregateUsageTrend returns time-bucketed usage aggregates over a created_at
+// range, optionally filtered by usage source kind and exact model id.
+// bucketSeconds is the bucket width in seconds (3600 for hour, 86400 for day);
+// bucket starts are UTC-aligned. Empty buckets are absent from the result —
+// the service zero-fills them so the chart stays continuous.
+func (s *Store) AggregateUsageTrend(
+	ctx context.Context,
+	from, to *time.Time,
+	bucketSeconds int64,
+	source, model string,
+) ([]domain.UsageTrendBucket, error) {
+	rows, err := s.qr.AggregateUsageTrend(ctx, gen.AggregateUsageTrendParams{
+		BucketSeconds: bucketSeconds,
+		From:          ptrTimeToNullTime(from),
+		To:            ptrTimeToNullTime(to),
+		Source:        stringOrNull(source),
+		Model:         stringOrNull(model),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("aggregate usage trend: %w", err)
+	}
+	out := make([]domain.UsageTrendBucket, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.UsageTrendBucket{
+			BucketStart: time.Unix(row.BucketKey*bucketSeconds, 0).UTC(),
+			EventCount:  row.EventCount,
+			Tokens: domain.UsageTokenMetrics{
+				InputTokens:         int64PtrWhen(row.InputTokens, row.KnownInputTokenCount == row.EventCount),
+				CachedInputTokens:   int64PtrWhen(row.CachedInputTokens, row.KnownCachedInputTokenCount == row.EventCount),
+				UncachedInputTokens: int64PtrWhen(row.UncachedInputTokens, row.KnownUncachedInputTokenCount == row.EventCount),
+				OutputTokens:        int64PtrWhen(row.OutputTokens, row.KnownOutputTokenCount == row.EventCount),
+			},
 			Cost: domain.UsageCostAggregate{
 				EventCount: row.EventCount, PricedEventCount: row.PricedEventCount, PricedTotalNanos: row.PricedTotalNanos,
 				ObservedCostEventCount: row.ObservedCostEventCount, InferredCostEventCount: row.InferredCostEventCount,

@@ -6612,6 +6612,205 @@ paths:
       summary: Check local machine readiness (git, tmux, agent harness, gh)
       tags:
       - system
+  /api/v1/usage/log:
+    get:
+      operationId: getUsageRequestLog
+      parameters:
+      - description: Inclusive lower created_at bound (RFC 3339).
+        in: query
+        name: from
+        schema:
+          description: Inclusive lower created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Inclusive upper created_at bound (RFC 3339).
+        in: query
+        name: to
+        schema:
+          description: Inclusive upper created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Optional usage source kind filter (for example claude_main or
+          codex_rollout).
+        in: query
+        name: source
+        schema:
+          description: Optional usage source kind filter (for example claude_main
+            or codex_rollout).
+          type: string
+      - description: Optional exact model id filter.
+        in: query
+        name: model
+        schema:
+          description: Optional exact model id filter.
+          type: string
+      - description: Requested page size, clamped to a bounded maximum.
+        in: query
+        name: limit
+        schema:
+          description: Requested page size, clamped to a bounded maximum.
+          format: int64
+          minimum: 1
+          type: integer
+      - description: 'Keyset cursor: return only events with id below this value.'
+        in: query
+        name: before
+        schema:
+          description: 'Keyset cursor: return only events with id below this value.'
+          format: int64
+          minimum: 1
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersUsageRequestLogResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List a bounded, newest-first page of usage events over an optional
+        time range
+      tags:
+      - usage
+  /api/v1/usage/models:
+    get:
+      operationId: getUsageModelStats
+      parameters:
+      - description: Inclusive lower created_at bound (RFC 3339).
+        in: query
+        name: from
+        schema:
+          description: Inclusive lower created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Inclusive upper created_at bound (RFC 3339).
+        in: query
+        name: to
+        schema:
+          description: Inclusive upper created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Optional usage source kind filter (claude_main, claude_subagent,
+          codex_rollout, kimi_wire). Omit for all sources.
+        in: query
+        name: source
+        schema:
+          description: Optional usage source kind filter (claude_main, claude_subagent,
+            codex_rollout, kimi_wire). Omit for all sources.
+          type: string
+      - description: Optional exact model id filter. Omit for all models.
+        in: query
+        name: model
+        schema:
+          description: Optional exact model id filter. Omit for all models.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListUsageModelStatsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get per-model usage aggregates over an optional range with optional
+        source/model filters
+      tags:
+      - usage
+  /api/v1/usage/providers:
+    get:
+      operationId: getUsageProviderStats
+      parameters:
+      - description: Inclusive lower created_at bound (RFC 3339).
+        in: query
+        name: from
+        schema:
+          description: Inclusive lower created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Inclusive upper created_at bound (RFC 3339).
+        in: query
+        name: to
+        schema:
+          description: Inclusive upper created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Optional usage source kind filter (claude_main, claude_subagent,
+          codex_rollout, kimi_wire). Omit for all sources.
+        in: query
+        name: source
+        schema:
+          description: Optional usage source kind filter (claude_main, claude_subagent,
+            codex_rollout, kimi_wire). Omit for all sources.
+          type: string
+      - description: Optional exact model id filter. Omit for all models.
+        in: query
+        name: model
+        schema:
+          description: Optional exact model id filter. Omit for all models.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListUsageProviderStatsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get per-billing-provider usage aggregates over an optional range with
+        optional source/model filters
+      tags:
+      - usage
   /api/v1/usage/sessions:
     get:
       operationId: listCompactSessionUsage
@@ -6681,6 +6880,177 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Get detailed token and estimated cost usage for one session
+      tags:
+      - usage
+  /api/v1/usage/sessions/{sessionId}/stats:
+    get:
+      operationId: getSessionRuntimeStats
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionRuntimeStatsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get per-session runtime statistics (rounds, steps, durations, first-token,
+        tok/s, token totals)
+      tags:
+      - usage
+  /api/v1/usage/summary:
+    get:
+      operationId: getUsageSummary
+      parameters:
+      - description: Inclusive lower created_at bound (RFC 3339).
+        in: query
+        name: from
+        schema:
+          description: Inclusive lower created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Inclusive upper created_at bound (RFC 3339).
+        in: query
+        name: to
+        schema:
+          description: Inclusive upper created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Optional usage source kind filter (for example claude_main or
+          codex_rollout).
+        in: query
+        name: source
+        schema:
+          description: Optional usage source kind filter (for example claude_main
+            or codex_rollout).
+          type: string
+      - description: Optional exact model id filter.
+        in: query
+        name: model
+        schema:
+          description: Optional exact model id filter.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageSummaryResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get global cross-session usage summary over an optional time range
+      tags:
+      - usage
+  /api/v1/usage/trend:
+    get:
+      operationId: getUsageTrend
+      parameters:
+      - description: Inclusive lower created_at bound (RFC 3339). Required.
+        in: query
+        name: from
+        schema:
+          description: Inclusive lower created_at bound (RFC 3339). Required.
+          format: date-time
+          type: string
+      - description: Inclusive upper created_at bound (RFC 3339). Required.
+        in: query
+        name: to
+        schema:
+          description: Inclusive upper created_at bound (RFC 3339). Required.
+          format: date-time
+          type: string
+      - description: Bucket width. Defaults to hour; clamped to day when the range
+          spans more than 31 days.
+        in: query
+        name: bucket
+        schema:
+          description: Bucket width. Defaults to hour; clamped to day when the range
+            spans more than 31 days.
+          enum:
+          - hour
+          - day
+          type: string
+      - description: Optional usage source kind filter (claude_main, claude_subagent,
+          codex_rollout, kimi_wire).
+        in: query
+        name: source
+        schema:
+          description: Optional usage source kind filter (claude_main, claude_subagent,
+            codex_rollout, kimi_wire).
+          type: string
+      - description: Optional exact model id filter.
+        in: query
+        name: model
+        schema:
+          description: Optional exact model id filter.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageTrendResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a time-bucketed usage trend over a required created_at range
       tags:
       - usage
 components:
@@ -8126,6 +8496,106 @@ components:
       required:
       - enabled
       type: object
+    ControllersUsageRequestLogEntryResponse:
+      properties:
+        billingProviderId:
+          description: Billing catalog provider, null when attribution is pending.
+          type:
+          - "null"
+          - string
+        cachedInputTokens:
+          description: Input read from an existing provider cache.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        createdAt:
+          description: Event timestamp, null for pre-capture events.
+          format: date-time
+          type:
+          - "null"
+          - string
+        estimatedCostNanos:
+          description: Durable nano-USD estimate, null when not yet priced.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        firstTokenMs:
+          description: First-token latency in milliseconds (user send to first response
+            received), null when unknown.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        id:
+          format: int64
+          type: integer
+        inputTokens:
+          description: Total input, including cached and uncached input.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        llmMs:
+          description: LLM elapsed in milliseconds (transcript-clock interval), null
+            when unknown.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        modelId:
+          type: string
+        outputTokens:
+          description: Total output.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        sessionExists:
+          description: Whether the owning session row still exists and can be opened.
+          type: boolean
+        sessionId:
+          description: Owning session id.
+          type: string
+        sourceKind:
+          enum:
+          - claude_main
+          - claude_subagent
+          - codex_rollout
+          - kimi_wire
+          type: string
+      required:
+      - id
+      - createdAt
+      - billingProviderId
+      - modelId
+      - inputTokens
+      - cachedInputTokens
+      - outputTokens
+      - estimatedCostNanos
+      - llmMs
+      - firstTokenMs
+      - sourceKind
+      - sessionId
+      - sessionExists
+      type: object
+    ControllersUsageRequestLogResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ControllersUsageRequestLogEntryResponse'
+          type: array
+        nextBeforeId:
+          description: Cursor for the next older page, null when this is the last
+            page.
+          type:
+          - "null"
+          - integer
+      required:
+      - items
+      - nextBeforeId
+      type: object
     ConversationAccountPayload:
       properties:
         authMode:
@@ -9093,6 +9563,22 @@ components:
       - sessionId
       - session
       type: object
+    FirstTokenCoverageResponse:
+      properties:
+        covered:
+          description: Requests whose first-token latency was captured.
+          format: int64
+          minimum: 0
+          type: integer
+        total:
+          description: Requests that could have carried a first-token latency.
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - covered
+      - total
+      type: object
     GitPreparationEvent:
       properties:
         action:
@@ -9525,6 +10011,24 @@ components:
           type: array
       required:
       - shellTerminals
+      type: object
+    ListUsageModelStatsResponse:
+      properties:
+        models:
+          items:
+            $ref: '#/components/schemas/UsageModelStatsRow'
+          type: array
+      required:
+      - models
+      type: object
+    ListUsageProviderStatsResponse:
+      properties:
+        providers:
+          items:
+            $ref: '#/components/schemas/UsageProviderStatsRow'
+          type: array
+      required:
+      - providers
       type: object
     ListWorkspaceFilesResponse:
       properties:
@@ -10905,6 +11409,71 @@ components:
       required:
       - session
       type: object
+    SessionRuntimeStatsResponse:
+      properties:
+        cacheHitRate:
+          description: Cached input / (cached + uncached input). Null when either
+            component is unknown.
+          type:
+          - "null"
+          - number
+        firstTokenAvgMs:
+          description: Average first-token latency in milliseconds over covered requests.
+            Null when none are covered.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        firstTokenCoverage:
+          $ref: '#/components/schemas/FirstTokenCoverageResponse'
+        llmMs:
+          description: Total LLM elapsed time in milliseconds. Null when unknown.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        outputTokensPerSecond:
+          description: 'Session average output tok/s: sum(output tokens) / sum(llm
+            seconds) over covered requests. Null when no request carries both facts.'
+          minimum: 0
+          type:
+          - "null"
+          - number
+        rounds:
+          description: Count of user exchanges. Null when no round facts were captured.
+          minimum: 1
+          type:
+          - "null"
+          - integer
+        sessionId:
+          type: string
+        steps:
+          description: Count of model requests/steps. Null when the session has no
+            usage or conversation facts.
+          minimum: 1
+          type:
+          - "null"
+          - integer
+        toolMs:
+          description: Total tool-call elapsed time in milliseconds. Null when unknown.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        totals:
+          $ref: '#/components/schemas/UsageTotalsResponse'
+      required:
+      - sessionId
+      - rounds
+      - steps
+      - llmMs
+      - toolMs
+      - firstTokenAvgMs
+      - firstTokenCoverage
+      - outputTokensPerSecond
+      - cacheHitRate
+      - totals
+      type: object
     SessionUsageResponse:
       properties:
         harnesses:
@@ -11722,6 +12291,125 @@ components:
       - modelId
       - totals
       type: object
+    UsageModelStatsRow:
+      properties:
+        avgCostPerRequestNanos:
+          description: Estimated total cost divided by request count. Null when cost
+            or events are unknown.
+          minimum: 0
+          type:
+          - "null"
+          - number
+        modelId:
+          type: string
+        processedTokens:
+          description: Input plus output across the row. Null unless every event reported
+            both.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        requestCount:
+          description: Count of usage events in the row (token-event granularity).
+          format: int64
+          minimum: 0
+          type: integer
+        totalCostNanos:
+          description: Estimated total cost in nano-USD. Null when the row has no
+            known cost.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+      required:
+      - modelId
+      - requestCount
+      - processedTokens
+      - totalCostNanos
+      - avgCostPerRequestNanos
+      type: object
+    UsageProviderStatsRow:
+      properties:
+        attributionSource:
+          description: How the billing provider was reached (observed, inferred, or
+            mixed). Null when the row carries no attribution.
+          enum:
+          - observed
+          - inferred
+          - mixed
+          type:
+          - "null"
+          - string
+        avgCostPerRequestNanos:
+          description: Estimated total cost divided by request count. Null when cost
+            or events are unknown.
+          minimum: 0
+          type:
+          - "null"
+          - number
+        billingProviderId:
+          description: Billing catalog provider id. Empty groups events with no provider
+            attribution.
+          type: string
+        processedTokens:
+          description: Input plus output across the row. Null unless every event reported
+            both.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        requestCount:
+          description: Count of usage events in the row (token-event granularity).
+          format: int64
+          minimum: 0
+          type: integer
+        totalCostNanos:
+          description: Estimated total cost in nano-USD. Null when the row has no
+            known cost.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+      required:
+      - billingProviderId
+      - attributionSource
+      - requestCount
+      - processedTokens
+      - totalCostNanos
+      - avgCostPerRequestNanos
+      type: object
+    UsageSummaryResponse:
+      properties:
+        cacheHitRate:
+          description: Cached input / (cached + uncached input). Null when either
+            component is unknown.
+          type:
+          - "null"
+          - number
+        models:
+          description: Distinct model ids present in the filtered range.
+          items:
+            type: string
+          type: array
+        requestCount:
+          description: Count of usage events in the range (token-event granularity).
+          format: int64
+          minimum: 0
+          type: integer
+        sources:
+          description: Distinct usage source kinds present in the filtered range.
+          items:
+            type: string
+          type: array
+        totals:
+          $ref: '#/components/schemas/UsageTotalsResponse'
+      required:
+      - totals
+      - requestCount
+      - cacheHitRate
+      - sources
+      - models
+      type: object
     UsageTotalsResponse:
       properties:
         cacheReadTokens:
@@ -11777,6 +12465,74 @@ components:
       - processedTokens
       - cacheReadTokens
       - estimatedCost
+      type: object
+    UsageTrendBucketResponse:
+      properties:
+        bucketStart:
+          format: date-time
+          type: string
+        cachedInputTokens:
+          description: Input read from an existing provider cache. Null when not fully
+            known.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        costNanos:
+          description: Durable estimated cost in nano-USD. Null when the bucket has
+            no known lower bound.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        inputTokens:
+          description: Total input, including cached and uncached input. Null when
+            not fully known.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        outputTokens:
+          description: Total output. Null when not fully known.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        requestCount:
+          description: Count of usage events in the bucket (token-event granularity).
+          format: int64
+          minimum: 0
+          type: integer
+        uncachedInputTokens:
+          description: Input not read from an existing provider cache; includes cache
+            writes. Null when not fully known.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+      required:
+      - bucketStart
+      - requestCount
+      - inputTokens
+      - cachedInputTokens
+      - uncachedInputTokens
+      - outputTokens
+      - costNanos
+      type: object
+    UsageTrendResponse:
+      properties:
+        bucketSize:
+          enum:
+          - hour
+          - day
+          type: string
+        buckets:
+          items:
+            $ref: '#/components/schemas/UsageTrendBucketResponse'
+          type: array
+      required:
+      - bucketSize
+      - buckets
       type: object
     WorkspaceCommitSummary:
       properties:

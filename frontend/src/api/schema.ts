@@ -2318,6 +2318,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a bounded, newest-first page of usage events over an optional time range */
+        get: operations["getUsageRequestLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get per-model usage aggregates over an optional range with optional source/model filters */
+        get: operations["getUsageModelStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get per-billing-provider usage aggregates over an optional range with optional source/model filters */
+        get: operations["getUsageProviderStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/sessions": {
         parameters: {
             query?: never;
@@ -2344,6 +2395,57 @@ export interface paths {
         };
         /** Get detailed token and estimated cost usage for one session */
         get: operations["getSessionUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/sessions/{sessionId}/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get per-session runtime statistics (rounds, steps, durations, first-token, tok/s, token totals) */
+        get: operations["getSessionRuntimeStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get global cross-session usage summary over an optional time range */
+        get: operations["getUsageSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/trend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a time-bucketed usage trend over a required created_at range */
+        get: operations["getUsageTrend"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2863,6 +2965,41 @@ export interface components {
         ControllersUpdateCloudOfferingRequest: {
             enabled: null | boolean;
         };
+        ControllersUsageRequestLogEntryResponse: {
+            /** @description Billing catalog provider, null when attribution is pending. */
+            billingProviderId: null | string;
+            /** @description Input read from an existing provider cache. */
+            cachedInputTokens: null | number;
+            /**
+             * Format: date-time
+             * @description Event timestamp, null for pre-capture events.
+             */
+            createdAt: null | string;
+            /** @description Durable nano-USD estimate, null when not yet priced. */
+            estimatedCostNanos: null | number;
+            /** @description First-token latency in milliseconds (user send to first response received), null when unknown. */
+            firstTokenMs: null | number;
+            /** Format: int64 */
+            id: number;
+            /** @description Total input, including cached and uncached input. */
+            inputTokens: null | number;
+            /** @description LLM elapsed in milliseconds (transcript-clock interval), null when unknown. */
+            llmMs: null | number;
+            modelId: string;
+            /** @description Total output. */
+            outputTokens: null | number;
+            /** @description Whether the owning session row still exists and can be opened. */
+            sessionExists: boolean;
+            /** @description Owning session id. */
+            sessionId: string;
+            /** @enum {string} */
+            sourceKind: "claude_main" | "claude_subagent" | "codex_rollout" | "kimi_wire";
+        };
+        ControllersUsageRequestLogResponse: {
+            items: components["schemas"]["ControllersUsageRequestLogEntryResponse"][];
+            /** @description Cursor for the next older page, null when this is the last page. */
+            nextBeforeId: null | number;
+        };
         ConversationAccountPayload: {
             authMode?: string;
             planLabel?: string;
@@ -3222,6 +3359,18 @@ export interface components {
             session: components["schemas"]["ControllersSessionView"];
             sessionId: string;
         };
+        FirstTokenCoverageResponse: {
+            /**
+             * Format: int64
+             * @description Requests whose first-token latency was captured.
+             */
+            covered: number;
+            /**
+             * Format: int64
+             * @description Requests that could have carried a first-token latency.
+             */
+            total: number;
+        };
         GitPreparationEvent: {
             /** @enum {string} */
             action: "git_init" | "git_commit" | "set_remote";
@@ -3371,6 +3520,12 @@ export interface components {
         };
         ListShellTerminalsResponse: {
             shellTerminals: components["schemas"]["ShellTerminalResponse"][];
+        };
+        ListUsageModelStatsResponse: {
+            models: components["schemas"]["UsageModelStatsRow"][];
+        };
+        ListUsageProviderStatsResponse: {
+            providers: components["schemas"]["UsageProviderStatsRow"][];
         };
         ListWorkspaceFilesResponse: {
             ahead?: null | number;
@@ -3901,6 +4056,25 @@ export interface components {
         SessionResponse: {
             session: components["schemas"]["ControllersSessionView"];
         };
+        SessionRuntimeStatsResponse: {
+            /** @description Cached input / (cached + uncached input). Null when either component is unknown. */
+            cacheHitRate: null | number;
+            /** @description Average first-token latency in milliseconds over covered requests. Null when none are covered. */
+            firstTokenAvgMs: null | number;
+            firstTokenCoverage: components["schemas"]["FirstTokenCoverageResponse"];
+            /** @description Total LLM elapsed time in milliseconds. Null when unknown. */
+            llmMs: null | number;
+            /** @description Session average output tok/s: sum(output tokens) / sum(llm seconds) over covered requests. Null when no request carries both facts. */
+            outputTokensPerSecond: null | number;
+            /** @description Count of user exchanges. Null when no round facts were captured. */
+            rounds: null | number;
+            sessionId: string;
+            /** @description Count of model requests/steps. Null when the session has no usage or conversation facts. */
+            steps: null | number;
+            /** @description Total tool-call elapsed time in milliseconds. Null when unknown. */
+            toolMs: null | number;
+            totals: components["schemas"]["UsageTotalsResponse"];
+        };
         SessionUsageResponse: {
             harnesses: components["schemas"]["UsageHarnessResponse"][];
             incomplete: boolean;
@@ -4228,6 +4402,54 @@ export interface components {
             modelId: string;
             totals: components["schemas"]["UsageTotalsResponse"];
         };
+        UsageModelStatsRow: {
+            /** @description Estimated total cost divided by request count. Null when cost or events are unknown. */
+            avgCostPerRequestNanos: null | number;
+            modelId: string;
+            /** @description Input plus output across the row. Null unless every event reported both. */
+            processedTokens: null | number;
+            /**
+             * Format: int64
+             * @description Count of usage events in the row (token-event granularity).
+             */
+            requestCount: number;
+            /** @description Estimated total cost in nano-USD. Null when the row has no known cost. */
+            totalCostNanos: null | number;
+        };
+        UsageProviderStatsRow: {
+            /**
+             * @description How the billing provider was reached (observed, inferred, or mixed). Null when the row carries no attribution.
+             * @enum {null|string}
+             */
+            attributionSource: "observed" | "inferred" | "mixed" | null;
+            /** @description Estimated total cost divided by request count. Null when cost or events are unknown. */
+            avgCostPerRequestNanos: null | number;
+            /** @description Billing catalog provider id. Empty groups events with no provider attribution. */
+            billingProviderId: string;
+            /** @description Input plus output across the row. Null unless every event reported both. */
+            processedTokens: null | number;
+            /**
+             * Format: int64
+             * @description Count of usage events in the row (token-event granularity).
+             */
+            requestCount: number;
+            /** @description Estimated total cost in nano-USD. Null when the row has no known cost. */
+            totalCostNanos: null | number;
+        };
+        UsageSummaryResponse: {
+            /** @description Cached input / (cached + uncached input). Null when either component is unknown. */
+            cacheHitRate: null | number;
+            /** @description Distinct model ids present in the filtered range. */
+            models: string[];
+            /**
+             * Format: int64
+             * @description Count of usage events in the range (token-event granularity).
+             */
+            requestCount: number;
+            /** @description Distinct usage source kinds present in the filtered range. */
+            sources: string[];
+            totals: components["schemas"]["UsageTotalsResponse"];
+        };
         UsageTotalsResponse: {
             /** @description Deprecated compatibility alias for cachedInputTokens. */
             cacheReadTokens: null | number;
@@ -4242,6 +4464,30 @@ export interface components {
             processedTokens: null | number;
             /** @description Input not read from an existing provider cache. Includes cache writes. */
             uncachedInputTokens: null | number;
+        };
+        UsageTrendBucketResponse: {
+            /** Format: date-time */
+            bucketStart: string;
+            /** @description Input read from an existing provider cache. Null when not fully known. */
+            cachedInputTokens: null | number;
+            /** @description Durable estimated cost in nano-USD. Null when the bucket has no known lower bound. */
+            costNanos: null | number;
+            /** @description Total input, including cached and uncached input. Null when not fully known. */
+            inputTokens: null | number;
+            /** @description Total output. Null when not fully known. */
+            outputTokens: null | number;
+            /**
+             * Format: int64
+             * @description Count of usage events in the bucket (token-event granularity).
+             */
+            requestCount: number;
+            /** @description Input not read from an existing provider cache; includes cache writes. Null when not fully known. */
+            uncachedInputTokens: null | number;
+        };
+        UsageTrendResponse: {
+            /** @enum {string} */
+            bucketSize: "hour" | "day";
+            buckets: components["schemas"]["UsageTrendBucketResponse"][];
         };
         WorkspaceCommitSummary: {
             author: string;
@@ -12707,6 +12953,178 @@ export interface operations {
             };
         };
     };
+    getUsageRequestLog: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower created_at bound (RFC 3339). */
+                from?: string;
+                /** @description Inclusive upper created_at bound (RFC 3339). */
+                to?: string;
+                /** @description Optional usage source kind filter (for example claude_main or codex_rollout). */
+                source?: string;
+                /** @description Optional exact model id filter. */
+                model?: string;
+                /** @description Requested page size, clamped to a bounded maximum. */
+                limit?: number;
+                /** @description Keyset cursor: return only events with id below this value. */
+                before?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersUsageRequestLogResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageModelStats: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower created_at bound (RFC 3339). */
+                from?: string;
+                /** @description Inclusive upper created_at bound (RFC 3339). */
+                to?: string;
+                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). Omit for all sources. */
+                source?: string;
+                /** @description Optional exact model id filter. Omit for all models. */
+                model?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListUsageModelStatsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageProviderStats: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower created_at bound (RFC 3339). */
+                from?: string;
+                /** @description Inclusive upper created_at bound (RFC 3339). */
+                to?: string;
+                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). Omit for all sources. */
+                source?: string;
+                /** @description Optional exact model id filter. Omit for all models. */
+                model?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListUsageProviderStatsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listCompactSessionUsage: {
         parameters: {
             query?: {
@@ -12771,6 +13189,170 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionRuntimeStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionRuntimeStatsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageSummary: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower created_at bound (RFC 3339). */
+                from?: string;
+                /** @description Inclusive upper created_at bound (RFC 3339). */
+                to?: string;
+                /** @description Optional usage source kind filter (for example claude_main or codex_rollout). */
+                source?: string;
+                /** @description Optional exact model id filter. */
+                model?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageSummaryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageTrend: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower created_at bound (RFC 3339). Required. */
+                from?: string;
+                /** @description Inclusive upper created_at bound (RFC 3339). Required. */
+                to?: string;
+                /** @description Bucket width. Defaults to hour; clamped to day when the range spans more than 31 days. */
+                bucket?: "hour" | "day";
+                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). */
+                source?: string;
+                /** @description Optional exact model id filter. */
+                model?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageTrendResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

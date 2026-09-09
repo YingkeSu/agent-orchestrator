@@ -213,6 +213,35 @@ type ModelUsageEvent struct {
 	SourceEventKey        string
 }
 
+// UsageEventTiming is the request-level timing fact captured at ingestion for
+// one native certified request (one model_usage_events row), per Decision 2 of
+// the timing ADR. SourceEventKey identifies the event; durations are
+// transcript-clock intervals between native record timestamps. A nil duration
+// means the bounding record was missing or predated capture (unknown, never
+// zero). RoundSeq is the durable round group ordinal assigned from certified
+// transcript prompt markers.
+type UsageEventTiming struct {
+	SourceEventKey string
+	RoundSeq       int64
+	LLMMS          *int64
+	ToolMS         *int64
+	FirstTokenMS   *int64
+}
+
+// UsageEventTimingRow is the request-log read model: one usage event with its
+// timing facts LEFT JOINed. A row with no timing facts carries RoundSeq 0 and
+// nil durations, which the caller renders as the unknown marker.
+type UsageEventTimingRow struct {
+	EventID        int64
+	BindingID      int64
+	CreatedAt      time.Time
+	SourceEventKey string
+	RoundSeq       int64
+	LLMMS          *int64
+	ToolMS         *int64
+	FirstTokenMS   *int64
+}
+
 // UsageCostCandidate is one still-total-null event selected for an exact
 // provider catalog attempt. Source facts remain immutable and are carried back
 // to storage as compare-and-swap guards.
@@ -352,6 +381,109 @@ type CompactSessionUsage struct {
 	ProcessedTokens *int64
 	Incomplete      bool
 	EstimatedCost   *EstimatedCost
+}
+
+// GlobalUsageAggregate is the raw cross-session usage aggregate read from
+// storage before the service applies coverage rules. It mirrors the per-model
+// aggregate over every session in the optional time range.
+type GlobalUsageAggregate struct {
+	EventCount int64
+	Tokens     UsageTokenMetrics
+	Cost       UsageCostAggregate
+}
+
+// GlobalUsageSummary is the cross-session usage read model for the usage
+// statistics dashboard. RequestCount counts usage events (token-event
+// granularity); true request-level semantics arrive with the timing pipeline.
+// Sources and Models are the distinct values present in the same filtered
+// scope, for dropdown options.
+type GlobalUsageSummary struct {
+	Totals       UsageMetricTotals
+	RequestCount int64
+	CacheHitRate *float64
+	Sources      []UsageSourceKind
+	Models       []string
+}
+
+// UsageSummaryDimensions is the distinct usage source kinds and model ids
+// present in a summary scope, for dropdown options.
+type UsageSummaryDimensions struct {
+	Sources []UsageSourceKind
+	Models  []string
+}
+
+// UsageRequestLogEntry is one normalized usage event on the request-log read
+// model. Token and cost counters stay nil when unknown. CreatedAt is nil when
+// the event predates timestamp capture. SessionExists reports whether the
+// owning session row still exists so the client can render a link only when
+// opening the session would succeed. LLMMS and FirstTokenMS are the timing
+// facts LEFT JOINed from model_usage_event_timing (Decision 2 of the timing
+// ADR): nil means no certified timing row exists for the event (pre-deployment
+// history, uncertified boundaries), never a measured zero.
+type UsageRequestLogEntry struct {
+	ID                 int64
+	CreatedAt          *time.Time
+	BillingProviderID  string
+	ModelID            string
+	InputTokens        *int64
+	CachedInputTokens  *int64
+	OutputTokens       *int64
+	EstimatedCostNanos *int64
+	LLMMS              *int64
+	FirstTokenMS       *int64
+	SourceKind         UsageSourceKind
+	SessionID          SessionID
+	SessionExists      bool
+}
+
+// UsageRequestLogPage is one bounded, newest-first page of usage events plus
+// the cursor needed to fetch the next older page. NextBeforeID is the id of the
+// last entry on the page; pass it as the before cursor to continue paging.
+type UsageRequestLogPage struct {
+	Items        []UsageRequestLogEntry
+	NextBeforeID *int64
+}
+
+// UsageTrendBucketSize identifies the width of one usage trend bucket.
+type UsageTrendBucketSize string
+
+// Usage trend bucket sizes.
+const (
+	UsageTrendBucketHour UsageTrendBucketSize = "hour"
+	UsageTrendBucketDay  UsageTrendBucketSize = "day"
+)
+
+// UsageTrendBucket is one raw time-bucketed usage aggregate read from storage
+// before the service applies coverage rules and zero-fills absent buckets.
+type UsageTrendBucket struct {
+	BucketStart time.Time
+	EventCount  int64
+	Tokens      UsageTokenMetrics
+	Cost        UsageCostAggregate
+}
+
+// UsageTrendBucketTotals is one derived bucket in the trend read model. Absent
+// buckets carry explicit zeros so the chart stays continuous; a bucket whose
+// metric is not fully known keeps a nil component (nil/unknown never zero).
+type UsageTrendBucketTotals struct {
+	BucketStart         time.Time
+	RequestCount        int64
+	InputTokens         *int64
+	CachedInputTokens   *int64
+	UncachedInputTokens *int64
+	OutputTokens        *int64
+	CostNanos           *int64
+}
+
+// GlobalUsageTrend is the cross-session time-bucketed usage read model over an
+// optional created_at range. Buckets are contiguous and UTC-aligned; the first
+// and last buckets may be partial when the range does not align to bucket
+// edges. Cache creation is not separable in the V1 pipeline: Anthropic cache
+// writes fold into UncachedInputTokens, so no separate cache-creation series
+// is derived.
+type GlobalUsageTrend struct {
+	BucketSize UsageTrendBucketSize
+	Buckets    []UsageTrendBucketTotals
 }
 
 // UsageMetricTotals is the aggregate metric block used by session, harness,

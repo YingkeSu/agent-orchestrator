@@ -428,6 +428,23 @@ WHERE id = sqlc.arg(id)
 -- name: TouchUsageBinding :exec
 UPDATE usage_bindings SET updated_at = ? WHERE id = ?;
 
+-- name: UpsertModelUsageEventTiming :one
+-- One timing row per model_usage_events.id (Decision 2 of the timing ADR).
+-- Written atomically with its event inside ApplyUsageChunk: an INSERT for a
+-- newly written event, and an upsert when a replayed/replacement generation
+-- re-derives the same logical event (the parent row identity does not change
+-- across a rehome, so the timing row is refreshed in place).
+INSERT INTO model_usage_event_timing (
+    event_id, round_seq, llm_ms, tool_ms, first_token_ms, created_at
+) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (event_id) DO UPDATE SET
+    round_seq      = excluded.round_seq,
+    llm_ms         = excluded.llm_ms,
+    tool_ms        = excluded.tool_ms,
+    first_token_ms = excluded.first_token_ms,
+    created_at     = excluded.created_at
+RETURNING event_id;
+
 -- name: ListUsageCostCandidates :many
 SELECT
     event.id,
@@ -597,6 +614,275 @@ WHERE ub.session_id = ?
 GROUP BY ub.harness, mue.model_id
 ORDER BY SUM(mue.input_tokens + mue.output_tokens) DESC, ub.harness, mue.model_id;
 
+-- name: AggregateUsageSummary :one
+-- Global (cross-session) usage summary over an optional created_at range. The
+-- from/to bounds are inclusive; passing NULL for either omits that bound. The
+-- optional source kind and model id filters are exact matches; passing NULL for
+-- either omits that filter. Every counter mirrors the per-session aggregate: a
+-- summed metric is only meaningful when every event in the scope carried it, so
+-- the known_*_count columns let the service drop any component that is not
+-- fully known.
+SELECT
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(mue.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(mue.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(mue.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(mue.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(mue.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(mue.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(mue.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(mue.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(mue.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(mue.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM model_usage_events mue
+WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
+  AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+  AND (sqlc.narg(source) IS NULL OR EXISTS (
+      SELECT 1
+      FROM usage_sources us
+      WHERE us.id = mue.usage_source_id
+        AND us.kind = sqlc.narg(source)
+  ))
+  AND (sqlc.narg(model) IS NULL OR mue.model_id = sqlc.narg(model));
+
+-- name: ListUsageSummaryDimensions :many
+-- Distinct (usage source kind, model id) pairs present in the summary scope.
+-- The scope is the same range and optional source/model filters the summary
+-- endpoint applies, so dropdown options stay meaningful: choosing a source
+-- narrows the model options to models that actually carry events from that
+-- source. Events without a durable source row cannot be filtered by source and
+-- so are excluded here.
+SELECT DISTINCT
+    us.kind AS source_kind,
+    mue.model_id
+FROM model_usage_events mue
+JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
+  AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+  AND (sqlc.narg(source) IS NULL OR us.kind = sqlc.narg(source))
+  AND (sqlc.narg(model) IS NULL OR mue.model_id = sqlc.narg(model))
+ORDER BY us.kind, mue.model_id;
+
+-- name: AggregateUsageByModel :many
+-- Global per-model usage rollup over an optional created_at range with optional
+-- source/model filters (the same optional filter params the summary accepts).
+-- Every counter mirrors the summary aggregate per model: a summed metric is only
+-- meaningful when every event in the group carried it, so the known_*_count
+-- columns let the service drop any component that is not fully known. The
+-- billing provider is a pricing input rather than a grouping key: a model stays
+-- one row even when more than one provider served it.
+SELECT
+    mue.model_id AS group_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(mue.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(mue.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(mue.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(mue.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' THEN 1 END) AS INTEGER) AS observed_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' THEN 1 END) AS INTEGER) AS inferred_event_count,
+    CAST(COUNT(mue.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(mue.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(mue.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(mue.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(mue.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(mue.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM model_usage_events mue
+LEFT JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
+  AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+  AND (sqlc.narg(source) IS NULL OR us.kind = sqlc.narg(source))
+  AND (sqlc.narg(model) IS NULL OR mue.model_id = sqlc.narg(model))
+GROUP BY mue.model_id
+ORDER BY mue.model_id;
+
+-- name: AggregateUsageByProvider :many
+-- Global per-billing-provider usage rollup over an optional created_at range
+-- with optional source/model filters (the same optional filter params the
+-- summary accepts). Events without a billing provider attribution
+-- (billing_provider_id IS NULL) group into the empty-string bucket so request
+-- counts and token totals never silently vanish from the provider view.
+SELECT
+    COALESCE(mue.billing_provider_id, '') AS group_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(mue.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(mue.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(mue.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(mue.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' THEN 1 END) AS INTEGER) AS observed_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' THEN 1 END) AS INTEGER) AS inferred_event_count,
+    CAST(COUNT(mue.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(mue.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(mue.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(mue.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(mue.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(mue.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM model_usage_events mue
+LEFT JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
+  AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+  AND (sqlc.narg(source) IS NULL OR us.kind = sqlc.narg(source))
+  AND (sqlc.narg(model) IS NULL OR mue.model_id = sqlc.narg(model))
+GROUP BY COALESCE(mue.billing_provider_id, '')
+ORDER BY COALESCE(mue.billing_provider_id, '');
+
+-- name: ListUsageRequestLog :many
+-- Newest-first, bounded page of normalized usage events over an optional
+-- created_at range and optional exact source kind / model id filters, plus a
+-- keyset cursor. The caller requests limit+1 rows to detect whether another
+-- page exists, then truncates to limit. Ordering is by event id descending,
+-- which is monotonic with insertion, NULL-safe (created_at is nullable and can
+-- be backfilled out of timestamp order), and stable: the before cursor filters
+-- by id, so a page never shifts as newer events are appended and no row can
+-- vanish or repeat between pages.
+--
+-- The timing join is nil-preserving (Decision 2/3 of the timing ADR): events
+-- without a timing row (pre-deployment history, uncertified boundaries) keep
+-- NULL llm_ms/first_token_ms, which the caller renders as the unknown marker,
+-- never zero. The join is 1:1 (timing.event_id is the primary key), so it
+-- cannot multiply rows or disturb the id keyset paging.
+SELECT
+    event.id,
+    event.created_at,
+    event.billing_provider_id,
+    event.model_id,
+    event.input_tokens,
+    event.cached_input_tokens,
+    event.output_tokens,
+    event.estimated_cost_nanos,
+    source.kind AS source_kind,
+    binding.session_id,
+    timing.llm_ms AS llm_ms,
+    timing.first_token_ms AS first_token_ms,
+    CAST(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS INTEGER) AS session_exists
+FROM model_usage_events event
+JOIN usage_sources source ON source.id = event.usage_source_id
+JOIN usage_bindings binding ON binding.id = event.binding_id
+LEFT JOIN sessions s ON s.id = binding.session_id
+LEFT JOIN model_usage_event_timing timing ON timing.event_id = event.id
+WHERE (sqlc.narg(from) IS NULL OR event.created_at >= sqlc.narg(from))
+  AND (sqlc.narg(to) IS NULL OR event.created_at <= sqlc.narg(to))
+  AND (sqlc.narg(source) IS NULL OR source.kind = sqlc.narg(source))
+  AND (sqlc.narg(model) IS NULL OR event.model_id = sqlc.narg(model))
+  AND (sqlc.narg(before_id) IS NULL OR event.id < sqlc.narg(before_id))
+ORDER BY event.id DESC
+LIMIT sqlc.arg(limit);
+
+-- name: AggregateUsageTrend :many
+-- Cross-session usage bucketed by UTC-aligned created_at intervals (hour or
+-- day). Every counter mirrors the global summary aggregate: a summed metric is
+-- only meaningful when every event in the bucket carried it, so the
+-- known_*_count columns let the service drop any component that is not fully
+-- known. The optional source filter matches the usage source kind that
+-- produced the event; the optional model filter matches the model id exactly.
+-- Events without a created_at cannot be placed in a bucket and are excluded.
+-- Bucket keys are unix epoch divided by the bucket width in seconds (3600 for
+-- hour, 86400 for day): the driver stores TIMESTAMP as a UTC text the SQLite
+-- date functions cannot parse, so the key is derived from its fixed prefix
+-- instead of strftime.
+SELECT
+    bucket_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(rows.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(rows.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(rows.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(rows.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(rows.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(rows.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(rows.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(rows.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(rows.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(rows.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN rows.billing_provider_source = 'observed' AND (
+        rows.estimated_cost_nanos IS NOT NULL OR rows.input_cost_nanos IS NOT NULL OR
+        rows.cached_input_cost_nanos IS NOT NULL OR rows.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN rows.billing_provider_source = 'inferred' AND (
+        rows.estimated_cost_nanos IS NOT NULL OR rows.input_cost_nanos IS NOT NULL OR
+        rows.cached_input_cost_nanos IS NOT NULL OR rows.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(rows.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(rows.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(rows.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(rows.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(rows.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(rows.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM (
+    SELECT
+        unixepoch(substr(mue.created_at, 1, 19)) / CAST(sqlc.arg(bucket_seconds) AS INTEGER) AS bucket_key,
+        mue.input_tokens,
+        mue.cached_input_tokens,
+        mue.uncached_input_tokens,
+        mue.output_tokens,
+        mue.estimated_cost_nanos,
+        mue.billing_provider_source,
+        mue.input_cost_nanos,
+        mue.cached_input_cost_nanos,
+        mue.output_cost_nanos
+    FROM model_usage_events mue
+    JOIN usage_sources us ON us.id = mue.usage_source_id
+    WHERE mue.created_at IS NOT NULL
+      AND (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
+      AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+      AND (sqlc.narg(source) IS NULL OR us.kind = sqlc.narg(source))
+      AND (sqlc.narg(model) IS NULL OR mue.model_id = sqlc.narg(model))
+) rows
+GROUP BY 1
+ORDER BY 1;
+
 -- name: GetUsageSessionIncomplete :one
 SELECT CAST(COALESCE((
     SELECT incomplete FROM usage_session_integrity WHERE session_id = ?
@@ -635,3 +921,137 @@ LEFT JOIN usage_session_integrity integrity ON integrity.session_id = ub.session
 WHERE (sqlc.arg(project_id) = '' OR s.project_id = sqlc.arg(project_id))
 GROUP BY ub.session_id, s.project_id, s.num, integrity.incomplete
 ORDER BY s.project_id, s.num;
+
+-- name: ListModelUsageEventTiming :many
+-- Request-log read model: every usage event in the range with its timing row
+-- LEFT JOINed. Events without a timing row (pre-timing ingestions, or a source
+-- whose timing facts were never certified) come back with NULL durations and a
+-- zero round_seq; the caller renders the unknown marker, never a zero.
+SELECT
+    mue.id AS event_id,
+    mue.binding_id,
+    mue.created_at,
+    mue.source_event_key,
+    timing.round_seq,
+    timing.llm_ms,
+    timing.tool_ms,
+    timing.first_token_ms
+FROM model_usage_events mue
+LEFT JOIN model_usage_event_timing timing ON timing.event_id = mue.id
+WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
+  AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+ORDER BY mue.id DESC;
+
+-- name: AggregateSessionRuntimeTiming :one
+-- Native/TUI-mode runtime statistics for one session (timing ADR #9): one
+-- rollup over certified usage events with their timing rows LEFT JOINed.
+-- StepCount counts every event (subagent sources included). RoundCount counts
+-- distinct (root source, round) pairs: only root-generation sources
+-- (subagent_id = '') contribute rounds, so a session's rounds count user
+-- exchanges, never agent-internal spawns. SUM() skips NULL durations, so a
+-- session whose timing facts were never certified (pre-deployment ingestions,
+-- a non-certified harness) returns NULL totals and the caller renders the
+-- unknown marker, never a zero. RateOutputTokens/RateLLMMS are the
+-- ratio-of-sums numerator and denominator for the session average output tok/s
+-- (ADR Decision 3): only events carrying both a positive LLM elapsed and known
+-- output tokens.
+SELECT
+    CAST(COUNT(mue.id) AS INTEGER) AS step_count,
+    CAST(COUNT(timing.event_id) AS INTEGER) AS timing_row_count,
+    CAST(COUNT(DISTINCT CASE WHEN src.subagent_id = '' THEN src.id || ':' || timing.round_seq END) AS INTEGER) AS round_count,
+    CAST(COALESCE(SUM(timing.llm_ms), -1) AS INTEGER) AS llm_ms_total,
+    CAST(COALESCE(SUM(timing.tool_ms), -1) AS INTEGER) AS tool_ms_total,
+    CAST(COALESCE(SUM(timing.first_token_ms), -1) AS INTEGER) AS first_token_ms_sum,
+    CAST(COUNT(timing.first_token_ms) AS INTEGER) AS first_token_known,
+    CAST(COALESCE(SUM(CASE WHEN timing.llm_ms IS NOT NULL AND mue.output_tokens IS NOT NULL AND timing.llm_ms > 0 THEN mue.output_tokens END), -1) AS INTEGER) AS rate_output_tokens,
+    CAST(COALESCE(SUM(CASE WHEN timing.llm_ms IS NOT NULL AND mue.output_tokens IS NOT NULL AND timing.llm_ms > 0 THEN timing.llm_ms END), -1) AS INTEGER) AS rate_llm_ms
+FROM model_usage_events mue
+JOIN usage_bindings ub ON ub.id = mue.binding_id
+JOIN usage_sources src ON src.id = mue.usage_source_id
+LEFT JOIN model_usage_event_timing timing ON timing.event_id = mue.id
+WHERE ub.session_id = ?;
+
+-- name: ListConversationRuntimeTurnFacts :many
+-- Chat-mode runtime statistics (timing ADR #9): one row per conversation turn
+-- on the session's active branch lineage. Turns are restricted to the session's
+-- own conversation and to the active lineage the timeline shows (rolled-back,
+-- promoted, and cancelled turns are discarded); daemon-only turns (compaction,
+-- provider-adopted resumes) carry no prompt. The store pairs these rows with
+-- ListConversationRuntimeContentRows to derive the per-turn facts.
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.session_id = sqlc.arg(session_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT
+    turn.id AS turn_id,
+    turn.state AS state,
+    turn.requested_at AS requested_at,
+    turn.started_at AS started_at,
+    turn.completed_at AS completed_at
+FROM conversation_turns turn
+JOIN active_path AS path ON path.branch_id = turn.branch_id
+WHERE turn.conversation_id IN (SELECT conversations.id FROM conversations WHERE conversations.session_id = sqlc.arg(session_id))
+  AND turn.promoted_to_turn_id IS NULL
+  AND turn.rolled_back_at IS NULL
+  AND turn.state <> 'cancelled'
+ORDER BY turn.requested_at, turn.rowid;
+
+-- name: ListConversationRuntimeContentRows :many
+-- Chat-mode runtime statistics content rows (timing ADR #9): every timeline
+-- item of the session's conversation on the active lineage, unified across
+-- messages and activities so the store can derive per-turn first-content,
+-- tool elapsed, and step counts with full timestamp precision (the driver's
+-- stored text format is not parseable by SQLite date functions). Rows with a
+-- NULL turn_id are dropped by the caller: only turn-attributed work counts.
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.session_id = sqlc.arg(session_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT
+    'message' AS row_kind,
+    conversation_messages.turn_id AS turn_id,
+    CAST(conversation_messages.role AS TEXT) AS role,
+    CAST(conversation_messages.origin AS TEXT) AS origin,
+    '' AS status,
+    conversation_messages.created_at AS created_at,
+    conversation_messages.updated_at AS updated_at
+FROM conversation_messages
+JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
+WHERE conversation_messages.conversation_id IN (SELECT conversations.id FROM conversations WHERE conversations.session_id = sqlc.arg(session_id))
+  AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
+UNION ALL
+SELECT
+    'activity' AS row_kind,
+    conversation_activities.turn_id AS turn_id,
+    '' AS role,
+    '' AS origin,
+    CAST(conversation_activities.status AS TEXT) AS status,
+    conversation_activities.created_at AS created_at,
+    conversation_activities.updated_at AS updated_at
+FROM conversation_activities
+JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
+WHERE conversation_activities.conversation_id IN (SELECT conversations.id FROM conversations WHERE conversations.session_id = sqlc.arg(session_id))
+  AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
+ORDER BY created_at;
