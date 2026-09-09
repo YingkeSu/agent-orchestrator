@@ -890,6 +890,8 @@ func (s *Store) ListUsageRequestLog(
 			CachedInputTokens:  nullInt64Ptr(row.CachedInputTokens),
 			OutputTokens:       nullInt64Ptr(row.OutputTokens),
 			EstimatedCostNanos: nullInt64Ptr(row.EstimatedCostNanos),
+			LLMMS:              nullInt64Ptr(row.LlmMs),
+			FirstTokenMS:       nullInt64Ptr(row.FirstTokenMs),
 			SourceKind:         row.SourceKind,
 			SessionID:          row.SessionID,
 			SessionExists:      row.SessionExists != 0,

@@ -372,14 +372,16 @@ func TestUsageSummaryAPIRejectsMalformedRange(t *testing.T) {
 func TestUsageAPIReturnsRequestLogPage(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	input, cachedInput, output, cost := int64(1100), int64(400), int64(200), int64(135)
+	llmMs, firstTokenMs := int64(43_000), int64(3_400)
 	before := int64(10)
 	svc := &fakeUsageSummaryService{logPage: domain.UsageRequestLogPage{
 		Items: []domain.UsageRequestLogEntry{
 			{
 				ID: 5, CreatedAt: &now, BillingProviderID: "anthropic", ModelID: "claude-sonnet",
 				InputTokens: &input, CachedInputTokens: &cachedInput, OutputTokens: &output,
-				EstimatedCostNanos: &cost, SourceKind: domain.UsageSourceClaudeMain,
-				SessionID: "reverb-12", SessionExists: true,
+				EstimatedCostNanos: &cost, LLMMS: &llmMs, FirstTokenMS: &firstTokenMs,
+				SourceKind: domain.UsageSourceClaudeMain,
+				SessionID:  "reverb-12", SessionExists: true,
 			},
 		},
 		NextBeforeID: &before,
@@ -406,6 +408,8 @@ func TestUsageAPIReturnsRequestLogPage(t *testing.T) {
 			CachedInputTokens  *int64  `json:"cachedInputTokens"`
 			OutputTokens       *int64  `json:"outputTokens"`
 			EstimatedCostNanos *int64  `json:"estimatedCostNanos"`
+			LLMMS              *int64  `json:"llmMs"`
+			FirstTokenMS       *int64  `json:"firstTokenMs"`
 			SourceKind         string  `json:"sourceKind"`
 			SessionID          string  `json:"sessionId"`
 			SessionExists      bool    `json:"sessionExists"`
@@ -422,6 +426,8 @@ func TestUsageAPIReturnsRequestLogPage(t *testing.T) {
 		item.CachedInputTokens == nil || *item.CachedInputTokens != 400 ||
 		item.OutputTokens == nil || *item.OutputTokens != 200 ||
 		item.EstimatedCostNanos == nil || *item.EstimatedCostNanos != 135 ||
+		item.LLMMS == nil || *item.LLMMS != 43_000 ||
+		item.FirstTokenMS == nil || *item.FirstTokenMS != 3_400 ||
 		item.SourceKind != "claude_main" || item.SessionID != "reverb-12" || !item.SessionExists {
 		t.Fatalf("item = %+v", item)
 	}
@@ -450,13 +456,17 @@ func TestUsageAPIReturnsNullBillingProviderWhenUnattributed(t *testing.T) {
 			CreatedAt         json.RawMessage `json:"createdAt"`
 			BillingProviderID json.RawMessage `json:"billingProviderId"`
 			InputTokens       json.RawMessage `json:"inputTokens"`
+			LLMMS             json.RawMessage `json:"llmMs"`
+			FirstTokenMS      json.RawMessage `json:"firstTokenMs"`
 			SessionExists     bool            `json:"sessionExists"`
 		} `json:"items"`
 	}
 	mustJSON(t, body, &got)
 	if len(got.Items) != 1 || string(got.Items[0].CreatedAt) != "null" ||
 		string(got.Items[0].BillingProviderID) != "null" ||
-		string(got.Items[0].InputTokens) != "null" || got.Items[0].SessionExists {
+		string(got.Items[0].InputTokens) != "null" ||
+		string(got.Items[0].LLMMS) != "null" ||
+		string(got.Items[0].FirstTokenMS) != "null" || got.Items[0].SessionExists {
 		t.Fatalf("unattributed item = %+v", got.Items)
 	}
 }

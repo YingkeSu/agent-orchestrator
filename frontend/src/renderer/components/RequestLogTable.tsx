@@ -3,6 +3,7 @@ import { Button } from "./ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { useUsageRequestLog } from "../hooks/useUsageRequestLog";
 import { formatCostNanos } from "../lib/format-cost";
+import { formatDurationMs } from "../lib/format-duration";
 import { formatTokenCount } from "../lib/format-token-count";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import type { MessageKey } from "../i18n/messages";
@@ -59,6 +60,8 @@ export function RequestLogTable({ from, to, source, model }: RequestLogTableProp
 						<TableHead>{t("usage.log.model")}</TableHead>
 						<TableHead>{t("usage.log.input")}</TableHead>
 						<TableHead>{t("usage.log.output")}</TableHead>
+						<TableHead>{t("usage.log.duration")}</TableHead>
+						<TableHead>{t("usage.log.firstToken")}</TableHead>
 						<TableHead>{t("usage.log.cost")}</TableHead>
 						<TableHead>{t("usage.log.source")}</TableHead>
 						<TableHead>{t("usage.log.session")}</TableHead>
@@ -83,6 +86,12 @@ export function RequestLogTable({ from, to, source, model }: RequestLogTableProp
 								<TableCell>{entry.modelId}</TableCell>
 								<TableCell className="tabular-nums">{inputLabel}</TableCell>
 								<TableCell className="tabular-nums">{formatTokens(entry.outputTokens) ?? "—"}</TableCell>
+								<TableCell className="tabular-nums whitespace-nowrap">
+									{formatDurationMs(entry.llmMs) ?? "—"}
+								</TableCell>
+								<TableCell className="tabular-nums whitespace-nowrap">
+									{formatDurationMs(entry.firstTokenMs) ?? "—"}
+								</TableCell>
 								<TableCell className="tabular-nums">
 									{formatCostNanos(entry.estimatedCostNanos) ?? "—"}
 								</TableCell>

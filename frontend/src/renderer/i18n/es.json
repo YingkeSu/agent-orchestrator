@@ -1879,6 +1879,8 @@
 	"usage.log.model": "Modelo",
 	"usage.log.input": "Entrada",
 	"usage.log.output": "Salida",
+	"usage.log.duration": "Duración",
+	"usage.log.firstToken": "Primer token",
 	"usage.log.cost": "Coste",
 	"usage.log.source": "Fuente",
 	"usage.log.session": "Sesión",

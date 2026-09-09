@@ -887,6 +887,50 @@ func TestListUsageRequestLogFiltersBySourceAndModel(t *testing.T) {
 	}
 }
 
+func TestListUsageRequestLogJoinsTimingNilPreserved(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+	session := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	source := seedUsageSource(t, s, session, now)
+
+	// One event carries certified timing facts; the other has none (a row
+	// ingested before the timing capture existed, or a boundary the source
+	// could not certify). The log must join the first and leave the second
+	// nil end to end — unknown stays unknown, never zero.
+	llm := int64(43_000)
+	firstToken := int64(3_400)
+	timed := anthropicUsageEvent("timed-1", 10, 0, 0, 40)
+	timed.CreatedAt = now
+	untimed := anthropicUsageEvent("untimed-1", 8, 0, 0, 12)
+	untimed.CreatedAt = now
+	mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{timed, untimed}, []domain.UsageEventTiming{{
+		SourceEventKey: timed.SourceEventKey, RoundSeq: 1, LLMMS: &llm, FirstTokenMS: &firstToken,
+	}}))
+
+	rows, err := s.ListUsageRequestLog(ctx, nil, nil, "", "", nil, 10)
+	mustNoError(t, err, "request log with timing")
+	// The timing join is 1:1, so it must not duplicate rows.
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 (no row multiplication from the timing join)", len(rows))
+	}
+	// Newest first: untimed was inserted last and so has the higher id. Its
+	// input vector (8) also distinguishes it from the timed row (10).
+	if rows[0].InputTokens == nil || *rows[0].InputTokens != 8 {
+		t.Fatalf("newest row = %+v, want the untimed event", rows[0])
+	}
+	if rows[0].LLMMS != nil || rows[0].FirstTokenMS != nil {
+		t.Fatalf("untimed row = %+v, want nil llmMs/firstTokenMs", rows[0])
+	}
+	if rows[1].LLMMS == nil || *rows[1].LLMMS != 43_000 ||
+		rows[1].FirstTokenMS == nil || *rows[1].FirstTokenMS != 3_400 {
+		t.Fatalf("timed row = %+v, want llmMs 43000 and firstTokenMs 3400", rows[1])
+	}
+}
+
 func timePtr(t time.Time) *time.Time {
 	return &t
 }

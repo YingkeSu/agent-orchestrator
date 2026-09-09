@@ -1837,6 +1837,8 @@
 	"usage.log.model": "模型",
 	"usage.log.input": "输入",
 	"usage.log.output": "输出",
+	"usage.log.duration": "用时",
+	"usage.log.firstToken": "首字",
 	"usage.log.cost": "费用",
 	"usage.log.source": "来源",
 	"usage.log.session": "会话",

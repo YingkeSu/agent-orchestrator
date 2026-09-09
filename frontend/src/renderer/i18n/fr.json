@@ -1879,6 +1879,8 @@
 	"usage.log.model": "Modèle",
 	"usage.log.input": "Entrée",
 	"usage.log.output": "Sortie",
+	"usage.log.duration": "Durée",
+	"usage.log.firstToken": "Premier jeton",
 	"usage.log.cost": "Coût",
 	"usage.log.source": "Source",
 	"usage.log.session": "Session",

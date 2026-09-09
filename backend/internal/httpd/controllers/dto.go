@@ -1492,7 +1492,9 @@ type UsageRequestLogQuery struct {
 // UsageRequestLogEntryResponse is one usage event on the request log. Token and
 // cost counters are null when unknown. createdAt is null when the event was
 // captured before timestamps existed. sessionExists reports whether the owning
-// session row still exists so the client can link to it only when it would open.
+// session row still exists so the client can link to it only when it would
+// open. llmMs and firstTokenMs are the request-level timing facts: null when
+// the event has no certified timing row, never a fabricated zero.
 type UsageRequestLogEntryResponse struct {
 	ID                 int64      `json:"id" format:"int64"`
 	CreatedAt          *time.Time `json:"createdAt" format:"date-time" description:"Event timestamp, null for pre-capture events."`
@@ -1502,6 +1504,8 @@ type UsageRequestLogEntryResponse struct {
 	CachedInputTokens  *int64     `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache."`
 	OutputTokens       *int64     `json:"outputTokens" minimum:"0" description:"Total output."`
 	EstimatedCostNanos *int64     `json:"estimatedCostNanos" minimum:"0" description:"Durable nano-USD estimate, null when not yet priced."`
+	LLMMS              *int64     `json:"llmMs" minimum:"0" description:"LLM elapsed in milliseconds (transcript-clock interval), null when unknown."`
+	FirstTokenMS       *int64     `json:"firstTokenMs" minimum:"0" description:"First-token latency in milliseconds (user send to first response received), null when unknown."`
 	SourceKind         string     `json:"sourceKind" enum:"claude_main,claude_subagent,codex_rollout,kimi_wire"`
 	SessionID          string     `json:"sessionId" description:"Owning session id."`
 	SessionExists      bool       `json:"sessionExists" description:"Whether the owning session row still exists and can be opened."`

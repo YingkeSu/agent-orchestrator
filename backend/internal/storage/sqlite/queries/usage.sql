@@ -785,6 +785,12 @@ ORDER BY COALESCE(mue.billing_provider_id, '');
 -- be backfilled out of timestamp order), and stable: the before cursor filters
 -- by id, so a page never shifts as newer events are appended and no row can
 -- vanish or repeat between pages.
+--
+-- The timing join is nil-preserving (Decision 2/3 of the timing ADR): events
+-- without a timing row (pre-deployment history, uncertified boundaries) keep
+-- NULL llm_ms/first_token_ms, which the caller renders as the unknown marker,
+-- never zero. The join is 1:1 (timing.event_id is the primary key), so it
+-- cannot multiply rows or disturb the id keyset paging.
 SELECT
     event.id,
     event.created_at,
@@ -796,11 +802,14 @@ SELECT
     event.estimated_cost_nanos,
     source.kind AS source_kind,
     binding.session_id,
+    timing.llm_ms AS llm_ms,
+    timing.first_token_ms AS first_token_ms,
     CAST(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS INTEGER) AS session_exists
 FROM model_usage_events event
 JOIN usage_sources source ON source.id = event.usage_source_id
 JOIN usage_bindings binding ON binding.id = event.binding_id
 LEFT JOIN sessions s ON s.id = binding.session_id
+LEFT JOIN model_usage_event_timing timing ON timing.event_id = event.id
 WHERE (sqlc.narg(from) IS NULL OR event.created_at >= sqlc.narg(from))
   AND (sqlc.narg(to) IS NULL OR event.created_at <= sqlc.narg(to))
   AND (sqlc.narg(source) IS NULL OR source.kind = sqlc.narg(source))
