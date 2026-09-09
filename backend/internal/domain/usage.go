@@ -416,7 +416,10 @@ type UsageSummaryDimensions struct {
 // model. Token and cost counters stay nil when unknown. CreatedAt is nil when
 // the event predates timestamp capture. SessionExists reports whether the
 // owning session row still exists so the client can render a link only when
-// opening the session would succeed.
+// opening the session would succeed. LLMMS and FirstTokenMS are the timing
+// facts LEFT JOINed from model_usage_event_timing (Decision 2 of the timing
+// ADR): nil means no certified timing row exists for the event (pre-deployment
+// history, uncertified boundaries), never a measured zero.
 type UsageRequestLogEntry struct {
 	ID                 int64
 	CreatedAt          *time.Time
@@ -426,6 +429,8 @@ type UsageRequestLogEntry struct {
 	CachedInputTokens  *int64
 	OutputTokens       *int64
 	EstimatedCostNanos *int64
+	LLMMS              *int64
+	FirstTokenMS       *int64
 	SourceKind         UsageSourceKind
 	SessionID          SessionID
 	SessionExists      bool

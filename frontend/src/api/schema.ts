@@ -2960,10 +2960,14 @@ export interface components {
             createdAt: null | string;
             /** @description Durable nano-USD estimate, null when not yet priced. */
             estimatedCostNanos: null | number;
+            /** @description First-token latency in milliseconds (user send to first response received), null when unknown. */
+            firstTokenMs: null | number;
             /** Format: int64 */
             id: number;
             /** @description Total input, including cached and uncached input. */
             inputTokens: null | number;
+            /** @description LLM elapsed in milliseconds (transcript-clock interval), null when unknown. */
+            llmMs: null | number;
             modelId: string;
             /** @description Total output. */
             outputTokens: null | number;

@@ -229,6 +229,8 @@ func (c *UsageController) getLog(w http.ResponseWriter, r *http.Request) {
 			CachedInputTokens:  entry.CachedInputTokens,
 			OutputTokens:       entry.OutputTokens,
 			EstimatedCostNanos: entry.EstimatedCostNanos,
+			LLMMS:              entry.LLMMS,
+			FirstTokenMS:       entry.FirstTokenMS,
 			SourceKind:         string(entry.SourceKind),
 			SessionID:          string(entry.SessionID),
 			SessionExists:      entry.SessionExists,

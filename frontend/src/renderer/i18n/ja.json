@@ -1855,6 +1855,8 @@
 	"usage.log.model": "モデル",
 	"usage.log.input": "入力",
 	"usage.log.output": "出力",
+	"usage.log.duration": "所要時間",
+	"usage.log.firstToken": "初トークン",
 	"usage.log.cost": "コスト",
 	"usage.log.source": "ソース",
 	"usage.log.session": "セッション",

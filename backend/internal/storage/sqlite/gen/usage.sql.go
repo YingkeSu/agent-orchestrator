@@ -1825,11 +1825,14 @@ SELECT
     event.estimated_cost_nanos,
     source.kind AS source_kind,
     binding.session_id,
+    timing.llm_ms AS llm_ms,
+    timing.first_token_ms AS first_token_ms,
     CAST(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END AS INTEGER) AS session_exists
 FROM model_usage_events event
 JOIN usage_sources source ON source.id = event.usage_source_id
 JOIN usage_bindings binding ON binding.id = event.binding_id
 LEFT JOIN sessions s ON s.id = binding.session_id
+LEFT JOIN model_usage_event_timing timing ON timing.event_id = event.id
 WHERE (?1 IS NULL OR event.created_at >= ?1)
   AND (?2 IS NULL OR event.created_at <= ?2)
   AND (?3 IS NULL OR source.kind = ?3)
@@ -1859,6 +1862,8 @@ type ListUsageRequestLogRow struct {
 	EstimatedCostNanos sql.NullInt64
 	SourceKind         domain.UsageSourceKind
 	SessionID          domain.SessionID
+	LlmMs              sql.NullInt64
+	FirstTokenMs       sql.NullInt64
 	SessionExists      int64
 }
 
@@ -1870,6 +1875,12 @@ type ListUsageRequestLogRow struct {
 // be backfilled out of timestamp order), and stable: the before cursor filters
 // by id, so a page never shifts as newer events are appended and no row can
 // vanish or repeat between pages.
+//
+// The timing join is nil-preserving (Decision 2/3 of the timing ADR): events
+// without a timing row (pre-deployment history, uncertified boundaries) keep
+// NULL llm_ms/first_token_ms, which the caller renders as the unknown marker,
+// never zero. The join is 1:1 (timing.event_id is the primary key), so it
+// cannot multiply rows or disturb the id keyset paging.
 func (q *Queries) ListUsageRequestLog(ctx context.Context, arg ListUsageRequestLogParams) ([]ListUsageRequestLogRow, error) {
 	rows, err := q.db.QueryContext(ctx, listUsageRequestLog,
 		arg.From,
@@ -1897,6 +1908,8 @@ func (q *Queries) ListUsageRequestLog(ctx context.Context, arg ListUsageRequestL
 			&i.EstimatedCostNanos,
 			&i.SourceKind,
 			&i.SessionID,
+			&i.LlmMs,
+			&i.FirstTokenMs,
 			&i.SessionExists,
 		); err != nil {
 			return nil, err

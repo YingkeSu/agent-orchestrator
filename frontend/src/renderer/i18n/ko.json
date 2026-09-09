@@ -1855,6 +1855,8 @@
 	"usage.log.model": "모델",
 	"usage.log.input": "입력",
 	"usage.log.output": "출력",
+	"usage.log.duration": "소요 시간",
+	"usage.log.firstToken": "첫 토큰",
 	"usage.log.cost": "비용",
 	"usage.log.source": "소스",
 	"usage.log.session": "세션",

@@ -8481,11 +8481,25 @@ components:
           type:
           - "null"
           - integer
+        firstTokenMs:
+          description: First-token latency in milliseconds (user send to first response
+            received), null when unknown.
+          minimum: 0
+          type:
+          - "null"
+          - integer
         id:
           format: int64
           type: integer
         inputTokens:
           description: Total input, including cached and uncached input.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        llmMs:
+          description: LLM elapsed in milliseconds (transcript-clock interval), null
+            when unknown.
           minimum: 0
           type:
           - "null"
@@ -8520,6 +8534,8 @@ components:
       - cachedInputTokens
       - outputTokens
       - estimatedCostNanos
+      - llmMs
+      - firstTokenMs
       - sourceKind
       - sessionId
       - sessionExists
