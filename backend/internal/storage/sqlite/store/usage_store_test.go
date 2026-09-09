@@ -589,7 +589,7 @@ func TestAggregateUsageSummaryFiltersBySourceAndModel(t *testing.T) {
 	codexEvent.CreatedAt = now
 	mustNoError(t, s.ApplyUsageChunk(ctx, codexSource.ID, 0, codexSource.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
-	}, []domain.ModelUsageEvent{codexEvent}))
+	}, []domain.ModelUsageEvent{codexEvent}, nil))
 
 	claudeSession := seedUsageSession(t, s, domain.HarnessClaudeCode)
 	claudeSource := seedUsageSource(t, s, claudeSession, now)
@@ -597,7 +597,7 @@ func TestAggregateUsageSummaryFiltersBySourceAndModel(t *testing.T) {
 	claudeEvent.CreatedAt = now
 	mustNoError(t, s.ApplyUsageChunk(ctx, claudeSource.ID, 0, claudeSource.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
-	}, []domain.ModelUsageEvent{claudeEvent}))
+	}, []domain.ModelUsageEvent{claudeEvent}, nil))
 
 	codexOnly, err := s.AggregateUsageSummary(ctx, nil, nil, "codex_rollout", "")
 	mustNoError(t, err, "filter by source kind")
@@ -636,7 +636,7 @@ func TestListUsageSummaryDimensionsScopesOptionsToTheFilteredRange(t *testing.T)
 	codexEvent.CreatedAt = now
 	mustNoError(t, s.ApplyUsageChunk(ctx, codexSource.ID, 0, codexSource.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
-	}, []domain.ModelUsageEvent{codexEvent}))
+	}, []domain.ModelUsageEvent{codexEvent}, nil))
 
 	claudeSession := seedUsageSession(t, s, domain.HarnessClaudeCode)
 	claudeSource := seedUsageSource(t, s, claudeSession, now)
@@ -645,7 +645,7 @@ func TestListUsageSummaryDimensionsScopesOptionsToTheFilteredRange(t *testing.T)
 	claudeEvent.CreatedAt = now
 	mustNoError(t, s.ApplyUsageChunk(ctx, claudeSource.ID, 0, claudeSource.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
-	}, []domain.ModelUsageEvent{claudeEvent}))
+	}, []domain.ModelUsageEvent{claudeEvent}, nil))
 
 	all, err := s.ListUsageSummaryDimensions(ctx, nil, nil, "", "")
 	mustNoError(t, err)
