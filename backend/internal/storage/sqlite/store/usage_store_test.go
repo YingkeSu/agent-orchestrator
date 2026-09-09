@@ -546,7 +546,7 @@ func TestAggregateUsageSummaryAggregatesAcrossSessionsAndRange(t *testing.T) {
 	}, []domain.ModelUsageEvent{claudeEvent}))
 
 	// Unbounded: both events aggregate.
-	all, err := s.AggregateUsageSummary(ctx, nil, nil)
+	all, err := s.AggregateUsageSummary(ctx, nil, nil, "", "")
 	mustNoError(t, err, "aggregate all")
 	if all.EventCount != 2 {
 		t.Fatalf("event count = %d, want 2", all.EventCount)
@@ -563,7 +563,7 @@ func TestAggregateUsageSummaryAggregatesAcrossSessionsAndRange(t *testing.T) {
 
 	// Range on day 1 only: just the codex event.
 	day1End := day1.Add(24 * time.Hour)
-	day1Only, err := s.AggregateUsageSummary(ctx, &day1, &day1End)
+	day1Only, err := s.AggregateUsageSummary(ctx, &day1, &day1End, "", "")
 	mustNoError(t, err, "aggregate day1")
 	if day1Only.EventCount != 1 || usageTokenValue(day1Only.Tokens.InputTokens) != 100 {
 		t.Fatalf("day1 aggregate = %+v", day1Only)
@@ -571,10 +571,107 @@ func TestAggregateUsageSummaryAggregatesAcrossSessionsAndRange(t *testing.T) {
 
 	// Empty range after both events.
 	after := day2.Add(48 * time.Hour)
-	empty, err := s.AggregateUsageSummary(ctx, &after, &after)
+	empty, err := s.AggregateUsageSummary(ctx, &after, &after, "", "")
 	mustNoError(t, err, "aggregate empty range")
 	if empty.EventCount != 0 {
 		t.Fatalf("empty range event count = %d, want 0", empty.EventCount)
+	}
+}
+
+func TestAggregateUsageSummaryFiltersBySourceAndModel(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+	codexSession := seedUsageSession(t, s, domain.HarnessCodex)
+	codexSource := seedUsageSource(t, s, codexSession, now)
+	codexEvent := usageEvent("codex-filter", canonicalUsageTokens(100, 40, 60, 30))
+	codexEvent.CreatedAt = now
+	mustNoError(t, s.ApplyUsageChunk(ctx, codexSource.ID, 0, codexSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{codexEvent}))
+
+	claudeSession := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	claudeSource := seedUsageSource(t, s, claudeSession, now)
+	claudeEvent := anthropicUsageEvent("claude-filter", 20, 10, 40, 15)
+	claudeEvent.CreatedAt = now
+	mustNoError(t, s.ApplyUsageChunk(ctx, claudeSource.ID, 0, claudeSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{claudeEvent}))
+
+	codexOnly, err := s.AggregateUsageSummary(ctx, nil, nil, "codex_rollout", "")
+	mustNoError(t, err, "filter by source kind")
+	if codexOnly.EventCount != 1 || usageTokenValue(codexOnly.Tokens.InputTokens) != 100 {
+		t.Fatalf("codex-filtered aggregate = %+v, want only the codex event", codexOnly)
+	}
+
+	modelOnly, err := s.AggregateUsageSummary(ctx, nil, nil, "", "claude-x")
+	mustNoError(t, err, "filter by model id")
+	if modelOnly.EventCount != 1 || usageTokenValue(modelOnly.Tokens.InputTokens) != 70 {
+		t.Fatalf("model-filtered aggregate = %+v, want only the claude event", modelOnly)
+	}
+
+	both, err := s.AggregateUsageSummary(ctx, nil, nil, "codex_rollout", "claude-x")
+	mustNoError(t, err, "filter by source and model")
+	if both.EventCount != 0 {
+		t.Fatalf("crossed filters aggregate = %+v, want no events", both)
+	}
+
+	unknown, err := s.AggregateUsageSummary(ctx, nil, nil, "no_such_source", "no-such-model")
+	mustNoError(t, err, "unknown filter must not error")
+	if unknown.EventCount != 0 {
+		t.Fatalf("unknown filter aggregate = %+v, want empty result", unknown)
+	}
+}
+
+func TestListUsageSummaryDimensionsScopesOptionsToTheFilteredRange(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+	codexSession := seedUsageSession(t, s, domain.HarnessCodex)
+	codexSource := seedUsageSource(t, s, codexSession, now)
+	codexEvent := usageEvent("codex-dim", canonicalUsageTokens(100, 40, 60, 30))
+	codexEvent.ModelID = "gpt-5.6"
+	codexEvent.CreatedAt = now
+	mustNoError(t, s.ApplyUsageChunk(ctx, codexSource.ID, 0, codexSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{codexEvent}))
+
+	claudeSession := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	claudeSource := seedUsageSource(t, s, claudeSession, now)
+	claudeEvent := anthropicUsageEvent("claude-dim", 20, 10, 40, 15)
+	claudeEvent.ModelID = "claude-sonnet"
+	claudeEvent.CreatedAt = now
+	mustNoError(t, s.ApplyUsageChunk(ctx, claudeSource.ID, 0, claudeSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{claudeEvent}))
+
+	all, err := s.ListUsageSummaryDimensions(ctx, nil, nil, "", "")
+	mustNoError(t, err)
+	if len(all.Sources) != 2 || all.Sources[0] != domain.UsageSourceClaudeMain || all.Sources[1] != domain.UsageSourceCodexRollout ||
+		len(all.Models) != 2 || all.Models[0] != "claude-sonnet" || all.Models[1] != "gpt-5.6" {
+		t.Fatalf("unfiltered dimensions = %+v", all)
+	}
+
+	bySource, err := s.ListUsageSummaryDimensions(ctx, nil, nil, "codex_rollout", "")
+	mustNoError(t, err)
+	if len(bySource.Sources) != 1 || bySource.Sources[0] != domain.UsageSourceCodexRollout ||
+		len(bySource.Models) != 1 || bySource.Models[0] != "gpt-5.6" {
+		t.Fatalf("source-scoped dimensions = %+v, want only codex models", bySource)
+	}
+
+	byModel, err := s.ListUsageSummaryDimensions(ctx, nil, nil, "", "claude-sonnet")
+	mustNoError(t, err)
+	if len(byModel.Sources) != 1 || byModel.Sources[0] != domain.UsageSourceClaudeMain ||
+		len(byModel.Models) != 1 || byModel.Models[0] != "claude-sonnet" {
+		t.Fatalf("model-scoped dimensions = %+v, want only the claude source", byModel)
+	}
+
+	unknown, err := s.ListUsageSummaryDimensions(ctx, nil, nil, "no_such_source", "")
+	mustNoError(t, err)
+	if len(unknown.Sources) != 0 || len(unknown.Models) != 0 {
+		t.Fatalf("unknown filter dimensions = %+v, want empty", unknown)
 	}
 }
 

@@ -599,10 +599,12 @@ ORDER BY SUM(mue.input_tokens + mue.output_tokens) DESC, ub.harness, mue.model_i
 
 -- name: AggregateUsageSummary :one
 -- Global (cross-session) usage summary over an optional created_at range. The
--- from/to bounds are inclusive; passing NULL for either omits that bound. Every
--- counter mirrors the per-session aggregate: a summed metric is only meaningful
--- when every event in the scope carried it, so the known_*_count columns let the
--- service drop any component that is not fully known.
+-- from/to bounds are inclusive; passing NULL for either omits that bound. The
+-- optional source kind and model id filters are exact matches; passing NULL for
+-- either omits that filter. Every counter mirrors the per-session aggregate: a
+-- summed metric is only meaningful when every event in the scope carried it, so
+-- the known_*_count columns let the service drop any component that is not
+-- fully known.
 SELECT
     CAST(COUNT(*) AS INTEGER) AS event_count,
     CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
@@ -634,7 +636,32 @@ SELECT
     CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
 FROM model_usage_events mue
 WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
-  AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to));
+  AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+  AND (sqlc.narg(source) IS NULL OR EXISTS (
+      SELECT 1
+      FROM usage_sources us
+      WHERE us.id = mue.usage_source_id
+        AND us.kind = sqlc.narg(source)
+  ))
+  AND (sqlc.narg(model) IS NULL OR mue.model_id = sqlc.narg(model));
+
+-- name: ListUsageSummaryDimensions :many
+-- Distinct (usage source kind, model id) pairs present in the summary scope.
+-- The scope is the same range and optional source/model filters the summary
+-- endpoint applies, so dropdown options stay meaningful: choosing a source
+-- narrows the model options to models that actually carry events from that
+-- source. Events without a durable source row cannot be filtered by source and
+-- so are excluded here.
+SELECT DISTINCT
+    us.kind AS source_kind,
+    mue.model_id
+FROM model_usage_events mue
+JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
+  AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+  AND (sqlc.narg(source) IS NULL OR us.kind = sqlc.narg(source))
+  AND (sqlc.narg(model) IS NULL OR mue.model_id = sqlc.narg(model))
+ORDER BY us.kind, mue.model_id;
 
 -- name: GetUsageSessionIncomplete :one
 SELECT CAST(COALESCE((

@@ -1403,20 +1403,27 @@ type SessionUsageResponse struct {
 
 // UsageSummaryQuery is the query string accepted by GET /api/v1/usage/summary.
 // from/to bound the created_at range (inclusive, RFC 3339); omitting either
-// leaves that side unbounded.
+// leaves that side unbounded. source/model are exact-match filters over the
+// usage source kind and model id; omitting either leaves that filter off.
 type UsageSummaryQuery struct {
-	From string `query:"from,omitempty" description:"Inclusive lower created_at bound (RFC 3339)." format:"date-time"`
-	To   string `query:"to,omitempty" description:"Inclusive upper created_at bound (RFC 3339)." format:"date-time"`
+	From   string `query:"from,omitempty" description:"Inclusive lower created_at bound (RFC 3339)." format:"date-time"`
+	To     string `query:"to,omitempty" description:"Inclusive upper created_at bound (RFC 3339)." format:"date-time"`
+	Source string `query:"source,omitempty" description:"Optional usage source kind filter (for example claude_main or codex_rollout)."`
+	Model  string `query:"model,omitempty" description:"Optional exact model id filter."`
 }
 
 // UsageSummaryResponse is the global cross-session usage summary. requestCount
 // counts usage events (token-event granularity); true request-level semantics
 // arrive with the timing pipeline. cacheHitRate is cached input divided by
-// cached plus uncached input, null when either component is unknown.
+// cached plus uncached input, null when either component is unknown. sources
+// and models are the distinct values present in the same filtered range, for
+// dropdown options.
 type UsageSummaryResponse struct {
 	Totals       UsageTotalsResponse `json:"totals"`
 	RequestCount int64               `json:"requestCount" minimum:"0" description:"Count of usage events in the range (token-event granularity)."`
 	CacheHitRate *float64            `json:"cacheHitRate" description:"Cached input / (cached + uncached input). Null when either component is unknown."`
+	Sources      []string            `json:"sources" description:"Distinct usage source kinds present in the filtered range."`
+	Models       []string            `json:"models" description:"Distinct model ids present in the filtered range."`
 }
 
 // SystemRequirementsResponse is the body of GET /api/v1/system/requirements.

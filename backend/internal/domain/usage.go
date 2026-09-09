@@ -366,10 +366,21 @@ type GlobalUsageAggregate struct {
 // GlobalUsageSummary is the cross-session usage read model for the usage
 // statistics dashboard. RequestCount counts usage events (token-event
 // granularity); true request-level semantics arrive with the timing pipeline.
+// Sources and Models are the distinct values present in the same filtered
+// scope, for dropdown options.
 type GlobalUsageSummary struct {
 	Totals       UsageMetricTotals
 	RequestCount int64
 	CacheHitRate *float64
+	Sources      []UsageSourceKind
+	Models       []string
+}
+
+// UsageSummaryDimensions is the distinct usage source kinds and model ids
+// present in a summary scope, for dropdown options.
+type UsageSummaryDimensions struct {
+	Sources []UsageSourceKind
+	Models  []string
 }
 
 // UsageMetricTotals is the aggregate metric block used by session, harness,

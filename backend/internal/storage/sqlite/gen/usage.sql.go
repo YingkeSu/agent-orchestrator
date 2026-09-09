@@ -164,11 +164,20 @@ SELECT
 FROM model_usage_events mue
 WHERE (?1 IS NULL OR mue.created_at >= ?1)
   AND (?2 IS NULL OR mue.created_at <= ?2)
+  AND (?3 IS NULL OR EXISTS (
+      SELECT 1
+      FROM usage_sources us
+      WHERE us.id = mue.usage_source_id
+        AND us.kind = ?3
+  ))
+  AND (?4 IS NULL OR mue.model_id = ?4)
 `
 
 type AggregateUsageSummaryParams struct {
-	From interface{}
-	To   interface{}
+	From   interface{}
+	To     interface{}
+	Source interface{}
+	Model  interface{}
 }
 
 type AggregateUsageSummaryRow struct {
@@ -197,12 +206,19 @@ type AggregateUsageSummaryRow struct {
 }
 
 // Global (cross-session) usage summary over an optional created_at range. The
-// from/to bounds are inclusive; passing NULL for either omits that bound. Every
-// counter mirrors the per-session aggregate: a summed metric is only meaningful
-// when every event in the scope carried it, so the known_*_count columns let the
-// service drop any component that is not fully known.
+// from/to bounds are inclusive; passing NULL for either omits that bound. The
+// optional source kind and model id filters are exact matches; passing NULL for
+// either omits that filter. Every counter mirrors the per-session aggregate: a
+// summed metric is only meaningful when every event in the scope carried it, so
+// the known_*_count columns let the service drop any component that is not
+// fully known.
 func (q *Queries) AggregateUsageSummary(ctx context.Context, arg AggregateUsageSummaryParams) (AggregateUsageSummaryRow, error) {
-	row := q.db.QueryRowContext(ctx, aggregateUsageSummary, arg.From, arg.To)
+	row := q.db.QueryRowContext(ctx, aggregateUsageSummary,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+	)
 	var i AggregateUsageSummaryRow
 	err := row.Scan(
 		&i.EventCount,
@@ -1333,6 +1349,65 @@ func (q *Queries) ListUsageSourcesForBinding(ctx context.Context, bindingID int6
 			&i.LastErrorCode,
 			&i.UpdatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsageSummaryDimensions = `-- name: ListUsageSummaryDimensions :many
+SELECT DISTINCT
+    us.kind AS source_kind,
+    mue.model_id
+FROM model_usage_events mue
+JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (?1 IS NULL OR mue.created_at >= ?1)
+  AND (?2 IS NULL OR mue.created_at <= ?2)
+  AND (?3 IS NULL OR us.kind = ?3)
+  AND (?4 IS NULL OR mue.model_id = ?4)
+ORDER BY us.kind, mue.model_id
+`
+
+type ListUsageSummaryDimensionsParams struct {
+	From   interface{}
+	To     interface{}
+	Source interface{}
+	Model  interface{}
+}
+
+type ListUsageSummaryDimensionsRow struct {
+	SourceKind domain.UsageSourceKind
+	ModelID    string
+}
+
+// Distinct (usage source kind, model id) pairs present in the summary scope.
+// The scope is the same range and optional source/model filters the summary
+// endpoint applies, so dropdown options stay meaningful: choosing a source
+// narrows the model options to models that actually carry events from that
+// source. Events without a durable source row cannot be filtered by source and
+// so are excluded here.
+func (q *Queries) ListUsageSummaryDimensions(ctx context.Context, arg ListUsageSummaryDimensionsParams) ([]ListUsageSummaryDimensionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUsageSummaryDimensions,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUsageSummaryDimensionsRow{}
+	for rows.Next() {
+		var i ListUsageSummaryDimensionsRow
+		if err := rows.Scan(&i.SourceKind, &i.ModelID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

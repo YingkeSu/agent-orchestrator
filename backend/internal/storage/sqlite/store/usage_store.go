@@ -797,11 +797,15 @@ func (s *Store) ListCompactSessionUsageAggregates(ctx context.Context, projectID
 }
 
 // AggregateUsageSummary returns the global cross-session usage aggregate over an
-// optional created_at range. A nil bound omits that side of the range.
-func (s *Store) AggregateUsageSummary(ctx context.Context, from, to *time.Time) (domain.GlobalUsageAggregate, error) {
+// optional created_at range. A nil bound omits that side of the range. The
+// optional source kind and model id filters are exact matches; an empty string
+// omits that filter.
+func (s *Store) AggregateUsageSummary(ctx context.Context, from, to *time.Time, source, model string) (domain.GlobalUsageAggregate, error) {
 	row, err := s.qr.AggregateUsageSummary(ctx, gen.AggregateUsageSummaryParams{
-		From: ptrTimeToNullTime(from),
-		To:   ptrTimeToNullTime(to),
+		From:   ptrTimeToNullTime(from),
+		To:     ptrTimeToNullTime(to),
+		Source: stringOrNull(source),
+		Model:  stringOrNull(model),
 	})
 	if err != nil {
 		return domain.GlobalUsageAggregate{}, fmt.Errorf("aggregate global usage summary: %w", err)
@@ -825,6 +829,35 @@ func (s *Store) AggregateUsageSummary(ctx context.Context, from, to *time.Time) 
 			UnpricedKnownOutputNanos: row.UnpricedKnownOutputNanos,
 		},
 	}, nil
+}
+
+// ListUsageSummaryDimensions returns the distinct usage source kinds and model
+// ids in the same filtered scope the summary aggregate uses, for dropdown
+// options. Sources are ordered by kind and models by model id.
+func (s *Store) ListUsageSummaryDimensions(ctx context.Context, from, to *time.Time, source, model string) (domain.UsageSummaryDimensions, error) {
+	rows, err := s.qr.ListUsageSummaryDimensions(ctx, gen.ListUsageSummaryDimensionsParams{
+		From:   ptrTimeToNullTime(from),
+		To:     ptrTimeToNullTime(to),
+		Source: stringOrNull(source),
+		Model:  stringOrNull(model),
+	})
+	if err != nil {
+		return domain.UsageSummaryDimensions{}, fmt.Errorf("list usage summary dimensions: %w", err)
+	}
+	var dims domain.UsageSummaryDimensions
+	seenSources := make(map[domain.UsageSourceKind]struct{}, len(rows))
+	seenModels := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if _, seen := seenSources[row.SourceKind]; !seen {
+			dims.Sources = append(dims.Sources, row.SourceKind)
+			seenSources[row.SourceKind] = struct{}{}
+		}
+		if _, seen := seenModels[row.ModelID]; !seen {
+			dims.Models = append(dims.Models, row.ModelID)
+			seenModels[row.ModelID] = struct{}{}
+		}
+	}
+	return dims, nil
 }
 
 func usageBindingFromGen(row gen.UsageBinding) domain.UsageBindingRecord {

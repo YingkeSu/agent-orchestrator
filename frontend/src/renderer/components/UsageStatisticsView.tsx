@@ -1,6 +1,10 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Layers } from "lucide-react";
+import { AgentAvatar } from "./AgentAvatar";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useUsageSummary } from "../hooks/useUsageSummary";
 import type { MessageKey } from "../i18n/messages";
 import { formatCostNanos } from "../lib/format-cost";
@@ -14,6 +18,33 @@ const PRESETS: { key: RangePreset; labelKey: MessageKey }[] = [
 	{ key: "7d", labelKey: "usage.range.sevenDays" },
 	{ key: "30d", labelKey: "usage.range.thirtyDays" },
 ];
+
+// Sentinel values for the shared select primitive: Radix rejects an empty
+// string as an item value, so "all" options use these and map back to "".
+const ALL_SOURCES = "__all_sources__";
+const ALL_MODELS = "__all_models__";
+
+// Usage source kinds are the certified artifact shapes the daemon persists.
+// Known kinds get a friendly label and the harness brand mark; unknown kinds
+// fall back to the raw kind so the dropdown still names what the data says.
+const SOURCE_LABEL_KEY: Record<string, MessageKey> = {
+	claude_main: "usage.sourceKind.claudeMain",
+	claude_subagent: "usage.sourceKind.claudeSubagent",
+	codex_rollout: "usage.sourceKind.codexRollout",
+	kimi_wire: "usage.sourceKind.kimiWire",
+};
+
+const SOURCE_PROVIDER: Record<string, string> = {
+	claude_main: "claude-code",
+	claude_subagent: "claude-code",
+	codex_rollout: "codex",
+	kimi_wire: "kimi",
+};
+
+function sourceLabel(t: (key: MessageKey) => string, kind: string): string {
+	const key = SOURCE_LABEL_KEY[kind];
+	return key ? t(key) : kind;
+}
 
 function rangeFor(preset: RangePreset): { from?: string; to?: string } {
 	const now = new Date();
@@ -60,12 +91,19 @@ function MetricCard({ label, value }: MetricCardProps) {
 export function UsageStatisticsView() {
 	const { t } = useTranslation();
 	const [preset, setPreset] = useState<RangePreset>("today");
+	const [source, setSource] = useState("");
+	const [model, setModel] = useState("");
 	const range = useMemo(() => rangeFor(preset), [preset]);
-	const { data, isLoading, isError } = useUsageSummary(range.from, range.to);
+	const { data, isLoading, isError } = useUsageSummary(range.from, range.to, source || undefined, model || undefined);
 
 	const totals = data?.totals;
 	const totalTokens = totals?.processedTokens ?? 0;
 	const cacheHitRate = data?.cacheHitRate;
+	const sources = data?.sources ?? [];
+	const models = data?.models ?? [];
+
+	const selectSource = (value: string) => setSource(value === ALL_SOURCES ? "" : value);
+	const selectModel = (value: string) => setModel(value === ALL_MODELS ? "" : value);
 
 	return (
 		<div className="flex h-full min-h-0 flex-col overflow-y-auto bg-background text-foreground">
@@ -94,6 +132,83 @@ export function UsageStatisticsView() {
 						))}
 					</div>
 				</header>
+
+				<div className="flex flex-wrap items-center gap-3">
+					<div className="flex items-center gap-1 rounded-lg bg-raised p-1">
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									className={cn(
+										"flex size-8 items-center justify-center rounded-md transition-colors",
+										source === ""
+											? "bg-accent text-accent-foreground"
+											: "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+									)}
+									aria-pressed={source === ""}
+									aria-label={t("usage.allSources")}
+									onClick={() => setSource("")}
+								>
+									<Layers className="size-4" aria-hidden="true" />
+								</button>
+							</TooltipTrigger>
+							<TooltipContent>{t("usage.allSources")}</TooltipContent>
+						</Tooltip>
+						{sources.map((kind) => {
+							const label = sourceLabel(t, kind);
+							return (
+								<Tooltip key={kind}>
+									<TooltipTrigger asChild>
+										<button
+											type="button"
+											className={cn(
+												"flex size-8 items-center justify-center rounded-md transition-colors",
+												source === kind
+													? "bg-accent text-accent-foreground"
+													: "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+											)}
+											aria-pressed={source === kind}
+											aria-label={label}
+											onClick={() => setSource(kind)}
+										>
+											<AgentAvatar provider={SOURCE_PROVIDER[kind] ?? kind} className="size-4" decorative />
+										</button>
+									</TooltipTrigger>
+									<TooltipContent>{label}</TooltipContent>
+								</Tooltip>
+							);
+						})}
+					</div>
+
+					<div className="flex items-center gap-2">
+						<Select value={source === "" ? ALL_SOURCES : source} onValueChange={selectSource}>
+							<SelectTrigger size="sm" aria-label={t("usage.allSources")}>
+								<SelectValue placeholder={t("usage.allSources")} />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value={ALL_SOURCES}>{t("usage.allSources")}</SelectItem>
+								{sources.map((kind) => (
+									<SelectItem key={kind} value={kind}>
+										{sourceLabel(t, kind)}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+						<Select value={model === "" ? ALL_MODELS : model} onValueChange={selectModel}>
+							<SelectTrigger size="sm" aria-label={t("usage.allModels")}>
+								<SelectValue placeholder={t("usage.allModels")} />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value={ALL_MODELS}>{t("usage.allModels")}</SelectItem>
+								{models.map((modelID) => (
+									<SelectItem key={modelID} value={modelID}>
+										{modelID}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
+				</div>
 
 				{isLoading ? (
 					<div className="flex items-center gap-2 text-sm text-muted-foreground">

@@ -1852,5 +1852,11 @@
 	"usage.totalInput": "Entrada total",
 	"usage.cacheHitRate": "Taxa de acerto do cache",
 	"usage.cacheHitRateHint": "Em cache / (em cache + nova)",
-	"usage.emptyRange": "Nenhum uso neste intervalo."
+	"usage.emptyRange": "Nenhum uso neste intervalo.",
+	"usage.allModels": "Todos os modelos",
+	"usage.allSources": "Todas as fontes",
+	"usage.sourceKind.claudeMain": "Claude",
+	"usage.sourceKind.claudeSubagent": "Claude subagente",
+	"usage.sourceKind.codexRollout": "Codex",
+	"usage.sourceKind.kimiWire": "Kimi"
 }

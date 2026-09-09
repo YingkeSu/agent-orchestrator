@@ -1828,5 +1828,11 @@
 	"usage.totalInput": "Gesamte Eingabe",
 	"usage.cacheHitRate": "Cache-Trefferquote",
 	"usage.cacheHitRateHint": "Zwischengespeichert / (zwischengespeichert + neu)",
-	"usage.emptyRange": "Keine Nutzung in diesem Zeitraum."
+	"usage.emptyRange": "Keine Nutzung in diesem Zeitraum.",
+	"usage.allModels": "Alle Modelle",
+	"usage.allSources": "Alle Quellen",
+	"usage.sourceKind.claudeMain": "Claude",
+	"usage.sourceKind.claudeSubagent": "Claude-Subagent",
+	"usage.sourceKind.codexRollout": "Codex",
+	"usage.sourceKind.kimiWire": "Kimi"
 }

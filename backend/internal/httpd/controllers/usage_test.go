@@ -24,6 +24,8 @@ type fakeUsageSummaryService struct {
 	global    domain.GlobalUsageSummary
 	from      *time.Time
 	to        *time.Time
+	source    string
+	model     string
 	err       error
 }
 
@@ -37,8 +39,8 @@ func (f *fakeUsageSummaryService) Get(_ context.Context, sessionID domain.Sessio
 	return f.detail, f.err
 }
 
-func (f *fakeUsageSummaryService) Global(_ context.Context, from, to *time.Time) (domain.GlobalUsageSummary, error) {
-	f.from, f.to = from, to
+func (f *fakeUsageSummaryService) Global(_ context.Context, from, to *time.Time, source, model string) (domain.GlobalUsageSummary, error) {
+	f.from, f.to, f.source, f.model = from, to, source, model
 	return f.global, f.err
 }
 
@@ -264,6 +266,51 @@ func TestUsageAPIReturnsGlobalSummary(t *testing.T) {
 		got.Totals.EstimatedCost.Coverage != "complete" ||
 		got.Totals.EstimatedCost.ProviderAttribution != "observed" {
 		t.Fatalf("totals = %+v", got.Totals)
+	}
+}
+
+func TestUsageSummaryAPIAppliesSourceAndModelFilters(t *testing.T) {
+	svc := &fakeUsageSummaryService{global: domain.GlobalUsageSummary{
+		RequestCount: 1,
+		Sources:      []domain.UsageSourceKind{domain.UsageSourceCodexRollout},
+		Models:       []string{"gpt-5.6"},
+	}}
+	srv := newUsageTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/summary?source=codex_rollout&model=gpt-5.6", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	if svc.source != "codex_rollout" || svc.model != "gpt-5.6" {
+		t.Fatalf("filters = source:%q model:%q", svc.source, svc.model)
+	}
+	var got struct {
+		Sources []string `json:"sources"`
+		Models  []string `json:"models"`
+	}
+	mustJSON(t, body, &got)
+	if len(got.Sources) != 1 || got.Sources[0] != "codex_rollout" ||
+		len(got.Models) != 1 || got.Models[0] != "gpt-5.6" {
+		t.Fatalf("dimensions = %+v", got)
+	}
+}
+
+func TestUsageSummaryAPIUnknownFilterYieldsEmptyNotError(t *testing.T) {
+	svc := &fakeUsageSummaryService{}
+	srv := newUsageTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/summary?source=no_such_source&model=no-such-model", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	var got struct {
+		RequestCount int64    `json:"requestCount"`
+		Sources      []string `json:"sources"`
+		Models       []string `json:"models"`
+	}
+	mustJSON(t, body, &got)
+	if got.RequestCount != 0 || len(got.Sources) != 0 || len(got.Models) != 0 {
+		t.Fatalf("unknown filter summary = %+v, want empty zero response", got)
 	}
 }
 

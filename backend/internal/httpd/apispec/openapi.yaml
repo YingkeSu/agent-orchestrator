@@ -6701,6 +6701,20 @@ paths:
           description: Inclusive upper created_at bound (RFC 3339).
           format: date-time
           type: string
+      - description: Optional usage source kind filter (for example claude_main or
+          codex_rollout).
+        in: query
+        name: source
+        schema:
+          description: Optional usage source kind filter (for example claude_main
+            or codex_rollout).
+          type: string
+      - description: Optional exact model id filter.
+        in: query
+        name: model
+        schema:
+          description: Optional exact model id filter.
+          type: string
       responses:
         "200":
           content:
@@ -11776,17 +11790,29 @@ components:
           type:
           - "null"
           - number
+        models:
+          description: Distinct model ids present in the filtered range.
+          items:
+            type: string
+          type: array
         requestCount:
           description: Count of usage events in the range (token-event granularity).
           format: int64
           minimum: 0
           type: integer
+        sources:
+          description: Distinct usage source kinds present in the filtered range.
+          items:
+            type: string
+          type: array
         totals:
           $ref: '#/components/schemas/UsageTotalsResponse'
       required:
       - totals
       - requestCount
       - cacheHitRate
+      - sources
+      - models
       type: object
     UsageTotalsResponse:
       properties:
