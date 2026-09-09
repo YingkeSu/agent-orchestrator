@@ -1005,6 +1005,53 @@ func (s *Store) ListModelUsageEventTiming(ctx context.Context, from, to *time.Ti
 	return out, nil
 }
 
+// AggregateUsageTrend returns time-bucketed usage aggregates over a created_at
+// range, optionally filtered by usage source kind and exact model id.
+// bucketSeconds is the bucket width in seconds (3600 for hour, 86400 for day);
+// bucket starts are UTC-aligned. Empty buckets are absent from the result —
+// the service zero-fills them so the chart stays continuous.
+func (s *Store) AggregateUsageTrend(
+	ctx context.Context,
+	from, to *time.Time,
+	bucketSeconds int64,
+	source, model string,
+) ([]domain.UsageTrendBucket, error) {
+	rows, err := s.qr.AggregateUsageTrend(ctx, gen.AggregateUsageTrendParams{
+		BucketSeconds: bucketSeconds,
+		From:          ptrTimeToNullTime(from),
+		To:            ptrTimeToNullTime(to),
+		Source:        stringOrNull(source),
+		Model:         stringOrNull(model),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("aggregate usage trend: %w", err)
+	}
+	out := make([]domain.UsageTrendBucket, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.UsageTrendBucket{
+			BucketStart: time.Unix(row.BucketKey*bucketSeconds, 0).UTC(),
+			EventCount:  row.EventCount,
+			Tokens: domain.UsageTokenMetrics{
+				InputTokens:         int64PtrWhen(row.InputTokens, row.KnownInputTokenCount == row.EventCount),
+				CachedInputTokens:   int64PtrWhen(row.CachedInputTokens, row.KnownCachedInputTokenCount == row.EventCount),
+				UncachedInputTokens: int64PtrWhen(row.UncachedInputTokens, row.KnownUncachedInputTokenCount == row.EventCount),
+				OutputTokens:        int64PtrWhen(row.OutputTokens, row.KnownOutputTokenCount == row.EventCount),
+			},
+			Cost: domain.UsageCostAggregate{
+				EventCount: row.EventCount, PricedEventCount: row.PricedEventCount, PricedTotalNanos: row.PricedTotalNanos,
+				ObservedCostEventCount: row.ObservedCostEventCount, InferredCostEventCount: row.InferredCostEventCount,
+				KnownInputCount: row.KnownInputCount, KnownInputNanos: row.KnownInputNanos,
+				UnpricedKnownInputNanos: row.UnpricedKnownInputNanos,
+				KnownCachedInputCount:   row.KnownCachedInputCount, KnownCachedInputNanos: row.KnownCachedInputNanos,
+				UnpricedKnownCachedInputNanos: row.UnpricedKnownCachedInputNanos,
+				KnownOutputCount:              row.KnownOutputCount, KnownOutputNanos: row.KnownOutputNanos,
+				UnpricedKnownOutputNanos: row.UnpricedKnownOutputNanos,
+			},
+		})
+	}
+	return out, nil
+}
+
 func usageBindingFromGen(row gen.UsageBinding) domain.UsageBindingRecord {
 	return domain.UsageBindingRecord{
 		ID:             row.ID,

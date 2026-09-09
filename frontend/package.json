@@ -113,6 +113,7 @@
 		"react-i18next": "^17.0.11",
 		"react-markdown": "^10.1.0",
 		"react-resizable-panels": "^4.11.2",
+		"recharts": "^3.10.1",
 		"rehype-autolink-headings": "^7.1.0",
 		"rehype-github-alerts": "^4.2.0",
 		"rehype-slug": "^6.0.0",

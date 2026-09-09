@@ -45,6 +45,13 @@ type fakeUsageSummaryService struct {
 	logModel       string
 	logBefore      *int64
 	logLimit       int64
+
+	trend      domain.GlobalUsageTrend
+	trendFrom  *time.Time
+	trendTo    *time.Time
+	trendSize  domain.UsageTrendBucketSize
+	trendSrc   string
+	trendModel string
 }
 
 func (f *fakeUsageSummaryService) ListCompact(_ context.Context, projectID domain.ProjectID) ([]domain.CompactSessionUsage, error) {
@@ -65,6 +72,11 @@ func (f *fakeUsageSummaryService) Global(_ context.Context, from, to *time.Time,
 func (f *fakeUsageSummaryService) ListRequestLog(_ context.Context, from, to *time.Time, source, model string, beforeID *int64, limit int64) (domain.UsageRequestLogPage, error) {
 	f.logFrom, f.logTo, f.logSource, f.logModel, f.logBefore, f.logLimit = from, to, source, model, beforeID, limit
 	return f.logPage, f.err
+}
+
+func (f *fakeUsageSummaryService) Trend(_ context.Context, from, to *time.Time, size domain.UsageTrendBucketSize, source, model string) (domain.GlobalUsageTrend, error) {
+	f.trendFrom, f.trendTo, f.trendSize, f.trendSrc, f.trendModel = from, to, size, source, model
+	return f.trend, f.err
 }
 
 func newUsageTestServer(t *testing.T, svc *fakeUsageSummaryService) *httptest.Server {
@@ -491,5 +503,99 @@ func TestUsageLogAPIDefaultsLimitWhenOmitted(t *testing.T) {
 	}
 	if svc.logFrom != nil || svc.logTo != nil || svc.logBefore != nil {
 		t.Fatalf("default log params = from %v to %v before %v, want all nil", svc.logFrom, svc.logTo, svc.logBefore)
+	}
+}
+
+func TestUsageAPIReturnsUsageTrend(t *testing.T) {
+	first := time.Date(2026, 9, 8, 13, 0, 0, 0, time.UTC)
+	second := first.Add(time.Hour)
+	zero, cost := int64(0), int64(50000000)
+	uncached, cached, output := int64(600), int64(400), int64(200)
+	svc := &fakeUsageSummaryService{trend: domain.GlobalUsageTrend{
+		BucketSize: domain.UsageTrendBucketHour,
+		Buckets: []domain.UsageTrendBucketTotals{
+			{
+				BucketStart: first, RequestCount: 2,
+				InputTokens: ptrInt64(1000), CachedInputTokens: &cached,
+				UncachedInputTokens: &uncached, OutputTokens: &output, CostNanos: &cost,
+			},
+			{
+				BucketStart: second, RequestCount: 0,
+				InputTokens: &zero, CachedInputTokens: &zero,
+				UncachedInputTokens: &zero, OutputTokens: &zero, CostNanos: &zero,
+			},
+		},
+	}}
+	srv := newUsageTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet,
+		"/api/v1/usage/trend?from=2026-09-08T13:37:00Z&to=2026-09-08T15:42:00Z&bucket=hour", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	if svc.trendFrom == nil || svc.trendFrom.Format(time.RFC3339) != "2026-09-08T13:37:00Z" ||
+		svc.trendTo == nil || svc.trendTo.Format(time.RFC3339) != "2026-09-08T15:42:00Z" ||
+		svc.trendSize != domain.UsageTrendBucketHour {
+		t.Fatalf("trend params = %v .. %v size %q", svc.trendFrom, svc.trendTo, svc.trendSize)
+	}
+	var got struct {
+		BucketSize string `json:"bucketSize"`
+		Buckets    []struct {
+			BucketStart         string `json:"bucketStart"`
+			RequestCount        int64  `json:"requestCount"`
+			InputTokens         *int64 `json:"inputTokens"`
+			CachedInputTokens   *int64 `json:"cachedInputTokens"`
+			UncachedInputTokens *int64 `json:"uncachedInputTokens"`
+			OutputTokens        *int64 `json:"outputTokens"`
+			CostNanos           *int64 `json:"costNanos"`
+		} `json:"buckets"`
+	}
+	mustJSON(t, body, &got)
+	if got.BucketSize != "hour" || len(got.Buckets) != 2 {
+		t.Fatalf("trend = %+v", got)
+	}
+	if got.Buckets[0].BucketStart != "2026-09-08T13:00:00Z" || got.Buckets[0].RequestCount != 2 ||
+		got.Buckets[0].CachedInputTokens == nil || *got.Buckets[0].CachedInputTokens != 400 ||
+		got.Buckets[0].CostNanos == nil || *got.Buckets[0].CostNanos != 50000000 {
+		t.Fatalf("first bucket = %+v", got.Buckets[0])
+	}
+	if got.Buckets[1].RequestCount != 0 || got.Buckets[1].CostNanos == nil || *got.Buckets[1].CostNanos != 0 {
+		t.Fatalf("zero-filled bucket = %+v, want explicit zero cost", got.Buckets[1])
+	}
+}
+
+func ptrInt64(v int64) *int64 { return &v }
+
+func TestUsageTrendAPIRequiresAndValidatesParams(t *testing.T) {
+	svc := &fakeUsageSummaryService{}
+	srv := newUsageTestServer(t, svc)
+
+	for _, path := range []string{
+		"/api/v1/usage/trend?to=2026-09-08T15:42:00Z",
+		"/api/v1/usage/trend?from=2026-09-08T13:37:00Z",
+		"/api/v1/usage/trend?from=not-a-time&to=2026-09-08T15:42:00Z",
+		"/api/v1/usage/trend?from=2026-09-08T13:37:00Z&to=2026-13-99T00:00:00Z",
+		"/api/v1/usage/trend?from=2026-09-08T13:37:00Z&to=2026-09-08T15:42:00Z&bucket=week",
+	} {
+		_, status, _ := doRequest(t, srv, http.MethodGet, path, "")
+		if status != http.StatusBadRequest {
+			t.Fatalf("status for %q = %d, want 400", path, status)
+		}
+	}
+}
+
+func TestUsageTrendAPIDefaultsBucketAndPassesFilters(t *testing.T) {
+	svc := &fakeUsageSummaryService{}
+	srv := newUsageTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodGet,
+		"/api/v1/usage/trend?from=2026-09-08T13:37:00Z&to=2026-09-08T15:42:00Z&source=codex_rollout&model=gpt-5.6", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	if svc.trendSize != domain.UsageTrendBucketHour {
+		t.Fatalf("default bucket size = %q, want hour", svc.trendSize)
+	}
+	if svc.trendSrc != "codex_rollout" || svc.trendModel != "gpt-5.6" {
+		t.Fatalf("trend filters = source:%q model:%q", svc.trendSrc, svc.trendModel)
 	}
 }

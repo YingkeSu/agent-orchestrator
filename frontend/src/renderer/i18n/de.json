@@ -1843,7 +1843,7 @@
 	"usage.sourceKind.claudeSubagent": "Claude-Subagent",
 	"usage.sourceKind.codexRollout": "Codex",
 	"usage.sourceKind.kimiWire": "Kimi",
-	"usage.tab.models": "Modellstatistik",
+"usage.tab.models": "Modellstatistik",
 	"usage.tab.providers": "Anbieterstatistik",
 	"usage.unattributed": "Nicht zugeordnet",
 	"usage.log.title": "Anfrageprotokoll",
@@ -1863,6 +1863,7 @@
 	"usage.log.source.claude_main": "Claude Haupt",
 	"usage.log.source.claude_subagent": "Claude Subagent",
 	"usage.log.source.codex_rollout": "Codex Rollout",
-	"usage.log.source.kimi_wire": "Kimi Wire"
-
+	"usage.log.source.kimi_wire": "Kimi Wire",
+"usage.trendTitle": "Nutzungstrend",
+	"usage.trendCost": "Kosten"
 }

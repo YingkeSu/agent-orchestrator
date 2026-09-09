@@ -1867,7 +1867,7 @@
 	"usage.sourceKind.claudeSubagent": "Claude sous-agent",
 	"usage.sourceKind.codexRollout": "Codex",
 	"usage.sourceKind.kimiWire": "Kimi",
-	"usage.tab.models": "Statistiques par modèle",
+"usage.tab.models": "Statistiques par modèle",
 	"usage.tab.providers": "Statistiques par fournisseur",
 	"usage.unattributed": "Non attribué",
 	"usage.log.title": "Journal des requêtes",
@@ -1887,6 +1887,7 @@
 	"usage.log.source.claude_main": "Claude principal",
 	"usage.log.source.claude_subagent": "Claude sous-agent",
 	"usage.log.source.codex_rollout": "Codex rollout",
-	"usage.log.source.kimi_wire": "Kimi wire"
-
+	"usage.log.source.kimi_wire": "Kimi wire",
+"usage.trendTitle": "Tendance d'utilisation",
+	"usage.trendCost": "Coût"
 }

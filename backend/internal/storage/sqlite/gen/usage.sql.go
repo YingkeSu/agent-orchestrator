@@ -523,6 +523,159 @@ func (q *Queries) AggregateUsageSummary(ctx context.Context, arg AggregateUsageS
 	return i, err
 }
 
+const aggregateUsageTrend = `-- name: AggregateUsageTrend :many
+SELECT
+    bucket_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(rows.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(rows.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(rows.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(rows.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(rows.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(rows.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(rows.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(rows.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(rows.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(rows.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN rows.billing_provider_source = 'observed' AND (
+        rows.estimated_cost_nanos IS NOT NULL OR rows.input_cost_nanos IS NOT NULL OR
+        rows.cached_input_cost_nanos IS NOT NULL OR rows.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN rows.billing_provider_source = 'inferred' AND (
+        rows.estimated_cost_nanos IS NOT NULL OR rows.input_cost_nanos IS NOT NULL OR
+        rows.cached_input_cost_nanos IS NOT NULL OR rows.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(rows.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(rows.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(rows.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(rows.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(rows.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(rows.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN rows.estimated_cost_nanos IS NULL THEN rows.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM (
+    SELECT
+        unixepoch(substr(mue.created_at, 1, 19)) / CAST(?1 AS INTEGER) AS bucket_key,
+        mue.input_tokens,
+        mue.cached_input_tokens,
+        mue.uncached_input_tokens,
+        mue.output_tokens,
+        mue.estimated_cost_nanos,
+        mue.billing_provider_source,
+        mue.input_cost_nanos,
+        mue.cached_input_cost_nanos,
+        mue.output_cost_nanos
+    FROM model_usage_events mue
+    JOIN usage_sources us ON us.id = mue.usage_source_id
+    WHERE mue.created_at IS NOT NULL
+      AND (?2 IS NULL OR mue.created_at >= ?2)
+      AND (?3 IS NULL OR mue.created_at <= ?3)
+      AND (?4 IS NULL OR us.kind = ?4)
+      AND (?5 IS NULL OR mue.model_id = ?5)
+) rows
+GROUP BY 1
+ORDER BY 1
+`
+
+type AggregateUsageTrendParams struct {
+	BucketSeconds int64
+	From          interface{}
+	To            interface{}
+	Source        interface{}
+	Model         interface{}
+}
+
+type AggregateUsageTrendRow struct {
+	BucketKey                     int64
+	EventCount                    int64
+	InputTokens                   int64
+	KnownInputTokenCount          int64
+	CachedInputTokens             int64
+	KnownCachedInputTokenCount    int64
+	UncachedInputTokens           int64
+	KnownUncachedInputTokenCount  int64
+	OutputTokens                  int64
+	KnownOutputTokenCount         int64
+	PricedEventCount              int64
+	PricedTotalNanos              int64
+	ObservedCostEventCount        int64
+	InferredCostEventCount        int64
+	KnownInputCount               int64
+	KnownInputNanos               int64
+	UnpricedKnownInputNanos       int64
+	KnownCachedInputCount         int64
+	KnownCachedInputNanos         int64
+	UnpricedKnownCachedInputNanos int64
+	KnownOutputCount              int64
+	KnownOutputNanos              int64
+	UnpricedKnownOutputNanos      int64
+}
+
+// Cross-session usage bucketed by UTC-aligned created_at intervals (hour or
+// day). Every counter mirrors the global summary aggregate: a summed metric is
+// only meaningful when every event in the bucket carried it, so the
+// known_*_count columns let the service drop any component that is not fully
+// known. The optional source filter matches the usage source kind that
+// produced the event; the optional model filter matches the model id exactly.
+// Events without a created_at cannot be placed in a bucket and are excluded.
+// Bucket keys are unix epoch divided by the bucket width in seconds (3600 for
+// hour, 86400 for day): the driver stores TIMESTAMP as a UTC text the SQLite
+// date functions cannot parse, so the key is derived from its fixed prefix
+// instead of strftime.
+func (q *Queries) AggregateUsageTrend(ctx context.Context, arg AggregateUsageTrendParams) ([]AggregateUsageTrendRow, error) {
+	rows, err := q.db.QueryContext(ctx, aggregateUsageTrend,
+		arg.BucketSeconds,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AggregateUsageTrendRow{}
+	for rows.Next() {
+		var i AggregateUsageTrendRow
+		if err := rows.Scan(
+			&i.BucketKey,
+			&i.EventCount,
+			&i.InputTokens,
+			&i.KnownInputTokenCount,
+			&i.CachedInputTokens,
+			&i.KnownCachedInputTokenCount,
+			&i.UncachedInputTokens,
+			&i.KnownUncachedInputTokenCount,
+			&i.OutputTokens,
+			&i.KnownOutputTokenCount,
+			&i.PricedEventCount,
+			&i.PricedTotalNanos,
+			&i.ObservedCostEventCount,
+			&i.InferredCostEventCount,
+			&i.KnownInputCount,
+			&i.KnownInputNanos,
+			&i.UnpricedKnownInputNanos,
+			&i.KnownCachedInputCount,
+			&i.KnownCachedInputNanos,
+			&i.UnpricedKnownCachedInputNanos,
+			&i.KnownOutputCount,
+			&i.KnownOutputNanos,
+			&i.UnpricedKnownOutputNanos,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const completeUsageBindingIfSettled = `-- name: CompleteUsageBindingIfSettled :execrows
 UPDATE usage_bindings
 SET state = CASE
