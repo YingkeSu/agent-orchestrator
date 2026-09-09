@@ -25,6 +25,8 @@ type usageSummaryStore interface {
 	AggregateUsageByProvider(context.Context, *time.Time, *time.Time, string, string) ([]domain.UsageProviderScopeAggregate, error)
 	ListUsageRequestLog(context.Context, *time.Time, *time.Time, string, string, *int64, int64) ([]domain.UsageRequestLogEntry, error)
 	AggregateUsageTrend(context.Context, *time.Time, *time.Time, int64, string, string) ([]domain.UsageTrendBucket, error)
+	AggregateSessionRuntimeTiming(context.Context, domain.SessionID) (domain.SessionRuntimeTimingAggregate, error)
+	ListConversationRuntimeTurnFacts(context.Context, domain.SessionID) ([]domain.ConversationRuntimeTurnFact, error)
 }
 
 // SummaryReader derives token and estimated-cost summaries from normalized
@@ -174,6 +176,161 @@ func cacheHitRate(tokens domain.UsageTokenMetrics) *float64 {
 	}
 	rate := float64(*tokens.CachedInputTokens) / float64(denominator)
 	return &rate
+}
+
+// SessionRuntimeStats returns the per-session runtime statistics read model
+// that backs the session stats bar (timing ADR #9). Token/cost totals and the
+// cache-hit rate come from usage events in both modes; timing figures are
+// derived at read time from the mode's own facts: conversation tables for chat
+// sessions, model_usage_event_timing for native sessions. Unknowns are nil,
+// never zero: a timing-less session (pre-deployment history, a non-certified
+// harness) renders token/cost facts with every timing section unknown.
+func (r *SummaryReader) RuntimeStats(ctx context.Context, sessionID domain.SessionID) (domain.SessionRuntimeStats, error) {
+	if r == nil || r.store == nil {
+		return domain.SessionRuntimeStats{}, fmt.Errorf("usage summary store is unavailable")
+	}
+	session, ok, err := r.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return domain.SessionRuntimeStats{}, err
+	}
+	if !ok {
+		return domain.SessionRuntimeStats{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+
+	stats := domain.SessionRuntimeStats{SessionID: sessionID}
+
+	models, err := r.store.ListUsageModelAggregates(ctx, sessionID)
+	if err != nil {
+		return domain.SessionRuntimeStats{}, err
+	}
+	visible := make([]domain.UsageModelAggregate, 0, len(models))
+	for _, model := range models {
+		if strings.EqualFold(strings.TrimSpace(model.ModelID), "<synthetic>") {
+			continue
+		}
+		visible = append(visible, model)
+	}
+	totals, err := usageTotals(visible)
+	if err != nil {
+		return domain.SessionRuntimeStats{}, err
+	}
+	stats.Totals = totals
+	stats.CacheHitRate = cacheHitRate(scopeTokenTotals(visible))
+
+	switch domain.NormalizeSessionMode(session.Mode) {
+	case domain.SessionModeChat:
+		turns, err := r.store.ListConversationRuntimeTurnFacts(ctx, sessionID)
+		if err != nil {
+			return domain.SessionRuntimeStats{}, err
+		}
+		deriveChatRuntimeStats(&stats, turns)
+	default:
+		agg, err := r.store.AggregateSessionRuntimeTiming(ctx, sessionID)
+		if err != nil {
+			return domain.SessionRuntimeStats{}, err
+		}
+		deriveNativeRuntimeStats(&stats, agg)
+	}
+	return stats, nil
+}
+
+// scopeTokenTotals sums one token metric across visible model aggregates with
+// the same full-knowledge rule as usageTotals: one uncollected counter makes
+// the whole sum unknown.
+func scopeTokenTotals(models []domain.UsageModelAggregate) domain.UsageTokenMetrics {
+	return domain.UsageTokenMetrics{
+		InputTokens:         aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.InputTokens }),
+		CachedInputTokens:   aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.CachedInputTokens }),
+		UncachedInputTokens: aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.UncachedInputTokens }),
+		OutputTokens:        aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.OutputTokens }),
+	}
+}
+
+// deriveNativeRuntimeStats applies the native/TUI-mode session aggregates (ADR
+// Decision 2/3). Steps count every usage event; rounds count only the captured
+// root-source round ordinals. Durations sum the known timing rows (SUM skips
+// NULLs upstream). The session first-token average is the arithmetic mean over
+// known values with its coverage; the session output tok/s is the ratio of
+// sums over the events carrying both facts. A session with no events leaves
+// every timing figure nil.
+func deriveNativeRuntimeStats(stats *domain.SessionRuntimeStats, agg domain.SessionRuntimeTimingAggregate) {
+	if agg.StepCount == 0 {
+		return
+	}
+	steps := agg.StepCount
+	stats.Steps = &steps
+	if agg.RoundCount > 0 {
+		rounds := agg.RoundCount
+		stats.Rounds = &rounds
+	}
+	stats.LLMMS = agg.LLMMSTotal
+	stats.ToolMS = agg.ToolMSTotal
+	if agg.FirstTokenKnown > 0 && agg.FirstTokenMSSum != nil {
+		avg := *agg.FirstTokenMSSum / agg.FirstTokenKnown
+		stats.FirstTokenAvgMS = &avg
+		stats.FirstTokenCoverage = domain.FirstTokenCoverage{Covered: agg.FirstTokenKnown, Total: agg.StepCount}
+	}
+	if agg.RateOutputTokens != nil && agg.RateLLMMS != nil && *agg.RateLLMMS > 0 {
+		rate := float64(*agg.RateOutputTokens) / (float64(*agg.RateLLMMS) / 1000.0)
+		stats.OutputTokensPerSecond = &rate
+	}
+}
+
+// deriveChatRuntimeStats applies the chat-mode session aggregates (ADR Decision
+// 1). Rounds count prompt-bearing turns; steps count assistant messages. A
+// turn's LLM elapsed is its terminal wall time minus its tool-call elapsed (a
+// remainder, unknown when the subtraction is negative); the session figure sums
+// the known turns. Tool time sums terminal activities' elapsed and is unknown
+// unless at least one terminal activity contributed. First-token is measured
+// from the turn's requested_at to its earliest assistant content row; the
+// session average is the mean over covered turns with its coverage against the
+// prompt-bearing total. A session with no conversation leaves every timing
+// figure nil.
+func deriveChatRuntimeStats(stats *domain.SessionRuntimeStats, turns []domain.ConversationRuntimeTurnFact) {
+	if len(turns) == 0 {
+		return
+	}
+	var steps, rounds, llmTotal, firstTokenSum, covered int64
+	var llmKnown, toolKnown bool
+	var toolTotal int64
+	for _, turn := range turns {
+		steps += turn.AssistantCount
+		if turn.PromptBearing {
+			rounds++
+		}
+		if turn.ToolKnown {
+			toolKnown = true
+			toolTotal += turn.ToolMS
+		}
+		if turn.State.Terminal() && turn.StartedAt != nil && turn.CompletedAt != nil && !turn.CompletedAt.Before(*turn.StartedAt) {
+			llm := turn.CompletedAt.Sub(*turn.StartedAt).Milliseconds() - turn.ToolMS
+			if llm >= 0 {
+				llmTotal += llm
+				llmKnown = true
+			}
+		}
+		if turn.PromptBearing && turn.FirstTokenDeltaMS != nil {
+			firstTokenSum += *turn.FirstTokenDeltaMS
+			covered++
+		}
+	}
+	if steps > 0 {
+		stats.Steps = &steps
+	}
+	if rounds > 0 {
+		stats.Rounds = &rounds
+	}
+	if llmKnown {
+		stats.LLMMS = &llmTotal
+	}
+	if toolKnown {
+		stats.ToolMS = &toolTotal
+	}
+	if covered > 0 {
+		avg := firstTokenSum / covered
+		stats.FirstTokenAvgMS = &avg
+		stats.FirstTokenCoverage = domain.FirstTokenCoverage{Covered: covered, Total: rounds}
+	}
 }
 
 func usageTotals(models []domain.UsageModelAggregate) (domain.UsageMetricTotals, error) {

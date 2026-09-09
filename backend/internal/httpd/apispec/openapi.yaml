@@ -6882,6 +6882,46 @@ paths:
       summary: Get detailed token and estimated cost usage for one session
       tags:
       - usage
+  /api/v1/usage/sessions/{sessionId}/stats:
+    get:
+      operationId: getSessionRuntimeStats
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionRuntimeStatsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get per-session runtime statistics (rounds, steps, durations, first-token,
+        tok/s, token totals)
+      tags:
+      - usage
   /api/v1/usage/summary:
     get:
       operationId: getUsageSummary
@@ -9523,6 +9563,22 @@ components:
       - sessionId
       - session
       type: object
+    FirstTokenCoverageResponse:
+      properties:
+        covered:
+          description: Requests whose first-token latency was captured.
+          format: int64
+          minimum: 0
+          type: integer
+        total:
+          description: Requests that could have carried a first-token latency.
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - covered
+      - total
+      type: object
     GitPreparationEvent:
       properties:
         action:
@@ -11352,6 +11408,71 @@ components:
           $ref: '#/components/schemas/ControllersSessionView'
       required:
       - session
+      type: object
+    SessionRuntimeStatsResponse:
+      properties:
+        cacheHitRate:
+          description: Cached input / (cached + uncached input). Null when either
+            component is unknown.
+          type:
+          - "null"
+          - number
+        firstTokenAvgMs:
+          description: Average first-token latency in milliseconds over covered requests.
+            Null when none are covered.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        firstTokenCoverage:
+          $ref: '#/components/schemas/FirstTokenCoverageResponse'
+        llmMs:
+          description: Total LLM elapsed time in milliseconds. Null when unknown.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        outputTokensPerSecond:
+          description: 'Session average output tok/s: sum(output tokens) / sum(llm
+            seconds) over covered requests. Null when no request carries both facts.'
+          minimum: 0
+          type:
+          - "null"
+          - number
+        rounds:
+          description: Count of user exchanges. Null when no round facts were captured.
+          minimum: 1
+          type:
+          - "null"
+          - integer
+        sessionId:
+          type: string
+        steps:
+          description: Count of model requests/steps. Null when the session has no
+            usage or conversation facts.
+          minimum: 1
+          type:
+          - "null"
+          - integer
+        toolMs:
+          description: Total tool-call elapsed time in milliseconds. Null when unknown.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        totals:
+          $ref: '#/components/schemas/UsageTotalsResponse'
+      required:
+      - sessionId
+      - rounds
+      - steps
+      - llmMs
+      - toolMs
+      - firstTokenAvgMs
+      - firstTokenCoverage
+      - outputTokensPerSecond
+      - cacheHitRate
+      - totals
       type: object
     SessionUsageResponse:
       properties:

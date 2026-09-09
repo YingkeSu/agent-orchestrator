@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 type fakeUsageSummaryService struct {
@@ -27,6 +28,8 @@ type fakeUsageSummaryService struct {
 	source    string
 	model     string
 	err       error
+
+	runtimeStats domain.SessionRuntimeStats
 
 	models         []domain.ModelUsageStatsRow
 	providers      []domain.ProviderUsageStatsRow
@@ -62,6 +65,11 @@ func (f *fakeUsageSummaryService) ListCompact(_ context.Context, projectID domai
 func (f *fakeUsageSummaryService) Get(_ context.Context, sessionID domain.SessionID) (domain.SessionUsageSummary, error) {
 	f.sessionID = sessionID
 	return f.detail, f.err
+}
+
+func (f *fakeUsageSummaryService) RuntimeStats(_ context.Context, sessionID domain.SessionID) (domain.SessionRuntimeStats, error) {
+	f.sessionID = sessionID
+	return f.runtimeStats, f.err
 }
 
 func (f *fakeUsageSummaryService) Global(_ context.Context, from, to *time.Time, source, model string) (domain.GlobalUsageSummary, error) {
@@ -607,5 +615,101 @@ func TestUsageTrendAPIDefaultsBucketAndPassesFilters(t *testing.T) {
 	}
 	if svc.trendSrc != "codex_rollout" || svc.trendModel != "gpt-5.6" {
 		t.Fatalf("trend filters = source:%q model:%q", svc.trendSrc, svc.trendModel)
+	}
+}
+
+func TestUsageAPIReturnsSessionRuntimeStats(t *testing.T) {
+	rounds, steps, llm, tool, firstToken := int64(11), int64(117), int64(1_217_000), int64(503_000), int64(4000)
+	rate := 84.0
+	cacheRate := 0.97
+	input, cachedInput, uncachedInput, output, processed := int64(3_000_000), int64(2_910_000), int64(90_000), int64(3_300_000), int64(6_300_000)
+	svc := &fakeUsageSummaryService{runtimeStats: domain.SessionRuntimeStats{
+		SessionID:             "reverb-12",
+		Rounds:                &rounds,
+		Steps:                 &steps,
+		LLMMS:                 &llm,
+		ToolMS:                &tool,
+		FirstTokenAvgMS:       &firstToken,
+		FirstTokenCoverage:    domain.FirstTokenCoverage{Covered: 12, Total: 15},
+		OutputTokensPerSecond: &rate,
+		CacheHitRate:          &cacheRate,
+		Totals: domain.UsageMetricTotals{
+			InputTokens: &input, CachedInputTokens: &cachedInput, UncachedInputTokens: &uncachedInput,
+			OutputTokens: &output, ProcessedTokens: &processed,
+		},
+	}}
+	srv := newUsageTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/sessions/reverb-12/stats", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	if svc.sessionID != "reverb-12" {
+		t.Fatalf("session id = %q", svc.sessionID)
+	}
+	var got struct {
+		SessionID          string `json:"sessionId"`
+		Rounds             *int64 `json:"rounds"`
+		Steps              *int64 `json:"steps"`
+		LLMMS              *int64 `json:"llmMs"`
+		ToolMS             *int64 `json:"toolMs"`
+		FirstTokenAvgMS    *int64 `json:"firstTokenAvgMs"`
+		FirstTokenCoverage struct {
+			Covered int64 `json:"covered"`
+			Total   int64 `json:"total"`
+		} `json:"firstTokenCoverage"`
+		OutputTokensPerSecond *float64 `json:"outputTokensPerSecond"`
+		CacheHitRate          *float64 `json:"cacheHitRate"`
+		Totals                struct {
+			ProcessedTokens *int64 `json:"processedTokens"`
+		} `json:"totals"`
+	}
+	mustJSON(t, body, &got)
+	if got.SessionID != "reverb-12" || got.Rounds == nil || *got.Rounds != 11 ||
+		got.Steps == nil || *got.Steps != 117 || got.LLMMS == nil || *got.LLMMS != 1_217_000 ||
+		got.ToolMS == nil || *got.ToolMS != 503_000 || got.FirstTokenAvgMS == nil || *got.FirstTokenAvgMS != 4000 ||
+		got.FirstTokenCoverage.Covered != 12 || got.FirstTokenCoverage.Total != 15 ||
+		got.OutputTokensPerSecond == nil || *got.OutputTokensPerSecond != 84 ||
+		got.CacheHitRate == nil || *got.CacheHitRate != 0.97 ||
+		got.Totals.ProcessedTokens == nil || *got.Totals.ProcessedTokens != 6_300_000 {
+		t.Fatalf("response = %+v", got)
+	}
+}
+
+func TestUsageAPIReturnsSessionRuntimeStatsWithUnknowns(t *testing.T) {
+	svc := &fakeUsageSummaryService{runtimeStats: domain.SessionRuntimeStats{SessionID: "reverb-12"}}
+	srv := newUsageTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/sessions/reverb-12/stats", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	var got struct {
+		Rounds             *int64          `json:"rounds"`
+		Steps              *int64          `json:"steps"`
+		LLMMS              *int64          `json:"llmMs"`
+		FirstTokenAvgMS    *int64          `json:"firstTokenAvgMs"`
+		OutputTokensPerSec *float64        `json:"outputTokensPerSecond"`
+		CacheHitRate       json.RawMessage `json:"cacheHitRate"`
+	}
+	mustJSON(t, body, &got)
+	// Timing figures without facts must serialize as explicit nulls, never
+	// zeroes; an absent coverage pair stays zero-valued.
+	if got.Rounds != nil || got.Steps != nil || got.LLMMS != nil ||
+		got.FirstTokenAvgMS != nil || got.OutputTokensPerSec != nil {
+		t.Fatalf("unknown timing fields = %+v, want all null", got)
+	}
+	if string(got.CacheHitRate) != "null" {
+		t.Fatalf("cacheHitRate = %s, want explicit null", got.CacheHitRate)
+	}
+}
+
+func TestUsageAPISessionRuntimeStatsNotFound(t *testing.T) {
+	svc := &fakeUsageSummaryService{err: apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")}
+	srv := newUsageTestServer(t, svc)
+
+	_, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/sessions/nope/stats", "")
+	if status != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", status)
 	}
 }

@@ -941,3 +941,117 @@ LEFT JOIN model_usage_event_timing timing ON timing.event_id = mue.id
 WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
   AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
 ORDER BY mue.id DESC;
+
+-- name: AggregateSessionRuntimeTiming :one
+-- Native/TUI-mode runtime statistics for one session (timing ADR #9): one
+-- rollup over certified usage events with their timing rows LEFT JOINed.
+-- StepCount counts every event (subagent sources included). RoundCount counts
+-- distinct (root source, round) pairs: only root-generation sources
+-- (subagent_id = '') contribute rounds, so a session's rounds count user
+-- exchanges, never agent-internal spawns. SUM() skips NULL durations, so a
+-- session whose timing facts were never certified (pre-deployment ingestions,
+-- a non-certified harness) returns NULL totals and the caller renders the
+-- unknown marker, never a zero. RateOutputTokens/RateLLMMS are the
+-- ratio-of-sums numerator and denominator for the session average output tok/s
+-- (ADR Decision 3): only events carrying both a positive LLM elapsed and known
+-- output tokens.
+SELECT
+    CAST(COUNT(mue.id) AS INTEGER) AS step_count,
+    CAST(COUNT(timing.event_id) AS INTEGER) AS timing_row_count,
+    CAST(COUNT(DISTINCT CASE WHEN src.subagent_id = '' THEN src.id || ':' || timing.round_seq END) AS INTEGER) AS round_count,
+    CAST(COALESCE(SUM(timing.llm_ms), -1) AS INTEGER) AS llm_ms_total,
+    CAST(COALESCE(SUM(timing.tool_ms), -1) AS INTEGER) AS tool_ms_total,
+    CAST(COALESCE(SUM(timing.first_token_ms), -1) AS INTEGER) AS first_token_ms_sum,
+    CAST(COUNT(timing.first_token_ms) AS INTEGER) AS first_token_known,
+    CAST(COALESCE(SUM(CASE WHEN timing.llm_ms IS NOT NULL AND mue.output_tokens IS NOT NULL AND timing.llm_ms > 0 THEN mue.output_tokens END), -1) AS INTEGER) AS rate_output_tokens,
+    CAST(COALESCE(SUM(CASE WHEN timing.llm_ms IS NOT NULL AND mue.output_tokens IS NOT NULL AND timing.llm_ms > 0 THEN timing.llm_ms END), -1) AS INTEGER) AS rate_llm_ms
+FROM model_usage_events mue
+JOIN usage_bindings ub ON ub.id = mue.binding_id
+JOIN usage_sources src ON src.id = mue.usage_source_id
+LEFT JOIN model_usage_event_timing timing ON timing.event_id = mue.id
+WHERE ub.session_id = ?;
+
+-- name: ListConversationRuntimeTurnFacts :many
+-- Chat-mode runtime statistics (timing ADR #9): one row per conversation turn
+-- on the session's active branch lineage. Turns are restricted to the session's
+-- own conversation and to the active lineage the timeline shows (rolled-back,
+-- promoted, and cancelled turns are discarded); daemon-only turns (compaction,
+-- provider-adopted resumes) carry no prompt. The store pairs these rows with
+-- ListConversationRuntimeContentRows to derive the per-turn facts.
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.session_id = sqlc.arg(session_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT
+    turn.id AS turn_id,
+    turn.state AS state,
+    turn.requested_at AS requested_at,
+    turn.started_at AS started_at,
+    turn.completed_at AS completed_at
+FROM conversation_turns turn
+JOIN active_path AS path ON path.branch_id = turn.branch_id
+WHERE turn.conversation_id IN (SELECT conversations.id FROM conversations WHERE conversations.session_id = sqlc.arg(session_id))
+  AND turn.promoted_to_turn_id IS NULL
+  AND turn.rolled_back_at IS NULL
+  AND turn.state <> 'cancelled'
+ORDER BY turn.requested_at, turn.rowid;
+
+-- name: ListConversationRuntimeContentRows :many
+-- Chat-mode runtime statistics content rows (timing ADR #9): every timeline
+-- item of the session's conversation on the active lineage, unified across
+-- messages and activities so the store can derive per-turn first-content,
+-- tool elapsed, and step counts with full timestamp precision (the driver's
+-- stored text format is not parseable by SQLite date functions). Rows with a
+-- NULL turn_id are dropped by the caller: only turn-attributed work counts.
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.session_id = sqlc.arg(session_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT
+    'message' AS row_kind,
+    conversation_messages.turn_id AS turn_id,
+    CAST(conversation_messages.role AS TEXT) AS role,
+    CAST(conversation_messages.origin AS TEXT) AS origin,
+    '' AS status,
+    conversation_messages.created_at AS created_at,
+    conversation_messages.updated_at AS updated_at
+FROM conversation_messages
+JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
+WHERE conversation_messages.conversation_id IN (SELECT conversations.id FROM conversations WHERE conversations.session_id = sqlc.arg(session_id))
+  AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
+UNION ALL
+SELECT
+    'activity' AS row_kind,
+    conversation_activities.turn_id AS turn_id,
+    '' AS role,
+    '' AS origin,
+    CAST(conversation_activities.status AS TEXT) AS status,
+    conversation_activities.created_at AS created_at,
+    conversation_activities.updated_at AS updated_at
+FROM conversation_activities
+JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
+WHERE conversation_activities.conversation_id IN (SELECT conversations.id FROM conversations WHERE conversations.session_id = sqlc.arg(session_id))
+  AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
+ORDER BY created_at;

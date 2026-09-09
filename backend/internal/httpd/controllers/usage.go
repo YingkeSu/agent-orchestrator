@@ -23,6 +23,7 @@ type UsageSummaryService interface {
 	Providers(context.Context, *time.Time, *time.Time, string, string) ([]domain.ProviderUsageStatsRow, error)
 	ListRequestLog(context.Context, *time.Time, *time.Time, string, string, *int64, int64) (domain.UsageRequestLogPage, error)
 	Trend(context.Context, *time.Time, *time.Time, domain.UsageTrendBucketSize, string, string) (domain.GlobalUsageTrend, error)
+	RuntimeStats(context.Context, domain.SessionID) (domain.SessionRuntimeStats, error)
 }
 
 // UsageController owns compact dashboard usage routes.
@@ -34,6 +35,7 @@ type UsageController struct {
 func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/{sessionId}", c.getSession)
+	r.Get("/usage/sessions/{sessionId}/stats", c.getSessionRuntimeStats)
 	r.Get("/usage/summary", c.getSummary)
 	r.Get("/usage/models", c.getModelStats)
 	r.Get("/usage/providers", c.getProviderStats)
@@ -339,6 +341,37 @@ func (c *UsageController) getSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, sessionUsageResponse(summary))
+}
+
+// getSessionRuntimeStats returns the per-session runtime statistics bar:
+// rounds, steps, LLM/tool time, first-token average, output tok/s, cache-hit
+// rate, and token/cost totals, all derived at read time per session mode.
+func (c *UsageController) getSessionRuntimeStats(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/sessions/{sessionId}/stats")
+		return
+	}
+	stats, err := c.Svc.RuntimeStats(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, sessionRuntimeStatsResponse(stats))
+}
+
+func sessionRuntimeStatsResponse(stats domain.SessionRuntimeStats) SessionRuntimeStatsResponse {
+	return SessionRuntimeStatsResponse{
+		SessionID:             stats.SessionID,
+		Rounds:                stats.Rounds,
+		Steps:                 stats.Steps,
+		LLMMS:                 stats.LLMMS,
+		ToolMS:                stats.ToolMS,
+		FirstTokenAvgMS:       stats.FirstTokenAvgMS,
+		FirstTokenCoverage:    FirstTokenCoverageResponse{Covered: stats.FirstTokenCoverage.Covered, Total: stats.FirstTokenCoverage.Total},
+		OutputTokensPerSecond: stats.OutputTokensPerSecond,
+		CacheHitRate:          stats.CacheHitRate,
+		Totals:                usageTotalsResponse(stats.Totals),
+	}
 }
 
 func sessionUsageResponse(summary domain.SessionUsageSummary) SessionUsageResponse {
