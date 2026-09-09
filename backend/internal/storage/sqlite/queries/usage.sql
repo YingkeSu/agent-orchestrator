@@ -428,6 +428,23 @@ WHERE id = sqlc.arg(id)
 -- name: TouchUsageBinding :exec
 UPDATE usage_bindings SET updated_at = ? WHERE id = ?;
 
+-- name: UpsertModelUsageEventTiming :one
+-- One timing row per model_usage_events.id (Decision 2 of the timing ADR).
+-- Written atomically with its event inside ApplyUsageChunk: an INSERT for a
+-- newly written event, and an upsert when a replayed/replacement generation
+-- re-derives the same logical event (the parent row identity does not change
+-- across a rehome, so the timing row is refreshed in place).
+INSERT INTO model_usage_event_timing (
+    event_id, round_seq, llm_ms, tool_ms, first_token_ms, created_at
+) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (event_id) DO UPDATE SET
+    round_seq      = excluded.round_seq,
+    llm_ms         = excluded.llm_ms,
+    tool_ms        = excluded.tool_ms,
+    first_token_ms = excluded.first_token_ms,
+    created_at     = excluded.created_at
+RETURNING event_id;
+
 -- name: ListUsageCostCandidates :many
 SELECT
     event.id,
@@ -797,3 +814,23 @@ LEFT JOIN usage_session_integrity integrity ON integrity.session_id = ub.session
 WHERE (sqlc.arg(project_id) = '' OR s.project_id = sqlc.arg(project_id))
 GROUP BY ub.session_id, s.project_id, s.num, integrity.incomplete
 ORDER BY s.project_id, s.num;
+
+-- name: ListModelUsageEventTiming :many
+-- Request-log read model: every usage event in the range with its timing row
+-- LEFT JOINed. Events without a timing row (pre-timing ingestions, or a source
+-- whose timing facts were never certified) come back with NULL durations and a
+-- zero round_seq; the caller renders the unknown marker, never a zero.
+SELECT
+    mue.id AS event_id,
+    mue.binding_id,
+    mue.created_at,
+    mue.source_event_key,
+    timing.round_seq,
+    timing.llm_ms,
+    timing.tool_ms,
+    timing.first_token_ms
+FROM model_usage_events mue
+LEFT JOIN model_usage_event_timing timing ON timing.event_id = mue.id
+WHERE (sqlc.narg(from) IS NULL OR mue.created_at >= sqlc.narg(from))
+  AND (sqlc.narg(to) IS NULL OR mue.created_at <= sqlc.narg(to))
+ORDER BY mue.id DESC;

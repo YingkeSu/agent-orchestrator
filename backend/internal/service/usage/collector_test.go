@@ -1554,7 +1554,7 @@ func TestCollectorReconcilesPersistedCodexChildrenRecursively(t *testing.T) {
 		State:           domain.UsageSourceActive,
 		ParserStateJSON: parentState,
 		UpdatedAt:       time.Now().UTC(),
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1583,7 +1583,7 @@ func TestCollectorReconcilesPersistedCodexChildrenRecursively(t *testing.T) {
 		State:           domain.UsageSourceActive,
 		ParserStateJSON: childState,
 		UpdatedAt:       time.Now().UTC(),
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	mustNoError(t, restarted.ReconcileSources(context.Background(), -1), "reconcile persisted grandchild")
@@ -1732,7 +1732,7 @@ func TestCollectorDoesNotTransferCursorAcrossNativeSessions(t *testing.T) {
 		ByteOffset: 100,
 		State:      domain.UsageSourceActive,
 		UpdatedAt:  now,
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	secondContent := codexSessionMetaFixture(t, "native-b", "") + strings.Repeat(" ", 256)

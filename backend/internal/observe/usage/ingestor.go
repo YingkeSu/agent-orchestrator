@@ -25,7 +25,7 @@ const (
 
 type ingestorStore interface {
 	GetUsageSourceForIngestion(context.Context, int64) (domain.UsageSourceContext, bool, error)
-	ApplyUsageChunk(context.Context, int64, int64, time.Time, domain.SourceCursorState, []domain.ModelUsageEvent) error
+	ApplyUsageChunk(context.Context, int64, int64, time.Time, domain.SourceCursorState, []domain.ModelUsageEvent, []domain.UsageEventTiming) error
 	HasOpenUsageAttribution(context.Context, int64) (bool, error)
 	MarkUsageSourceState(context.Context, int64, domain.UsageSourceState, string, *time.Time, time.Time) (bool, error)
 	MarkUsageSourceFailure(context.Context, int64, int64, string, time.Time, time.Time) (bool, error)
@@ -311,6 +311,7 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 			source.Source.UpdatedAt,
 			parsed.Cursor,
 			parsed.Events,
+			parsed.Timing,
 		)
 	}
 	if i.pricing != nil {
@@ -345,6 +346,7 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 					source.Source.UpdatedAt,
 					parsed.Cursor,
 					parsed.Events,
+					parsed.Timing,
 				)
 			})
 		}

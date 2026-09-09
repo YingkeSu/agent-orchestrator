@@ -1333,6 +1333,75 @@ func (q *Queries) ListLegacyUsageSourceIDs(ctx context.Context) ([]int64, error)
 	return items, nil
 }
 
+const listModelUsageEventTiming = `-- name: ListModelUsageEventTiming :many
+SELECT
+    mue.id AS event_id,
+    mue.binding_id,
+    mue.created_at,
+    mue.source_event_key,
+    timing.round_seq,
+    timing.llm_ms,
+    timing.tool_ms,
+    timing.first_token_ms
+FROM model_usage_events mue
+LEFT JOIN model_usage_event_timing timing ON timing.event_id = mue.id
+WHERE (?1 IS NULL OR mue.created_at >= ?1)
+  AND (?2 IS NULL OR mue.created_at <= ?2)
+ORDER BY mue.id DESC
+`
+
+type ListModelUsageEventTimingParams struct {
+	From interface{}
+	To   interface{}
+}
+
+type ListModelUsageEventTimingRow struct {
+	EventID        int64
+	BindingID      int64
+	CreatedAt      sql.NullTime
+	SourceEventKey string
+	RoundSeq       sql.NullInt64
+	LlmMs          sql.NullInt64
+	ToolMs         sql.NullInt64
+	FirstTokenMs   sql.NullInt64
+}
+
+// Request-log read model: every usage event in the range with its timing row
+// LEFT JOINed. Events without a timing row (pre-timing ingestions, or a source
+// whose timing facts were never certified) come back with NULL durations and a
+// zero round_seq; the caller renders the unknown marker, never a zero.
+func (q *Queries) ListModelUsageEventTiming(ctx context.Context, arg ListModelUsageEventTimingParams) ([]ListModelUsageEventTimingRow, error) {
+	rows, err := q.db.QueryContext(ctx, listModelUsageEventTiming, arg.From, arg.To)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListModelUsageEventTimingRow{}
+	for rows.Next() {
+		var i ListModelUsageEventTimingRow
+		if err := rows.Scan(
+			&i.EventID,
+			&i.BindingID,
+			&i.CreatedAt,
+			&i.SourceEventKey,
+			&i.RoundSeq,
+			&i.LlmMs,
+			&i.ToolMs,
+			&i.FirstTokenMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsageBindingsForCodexParent = `-- name: ListUsageBindingsForCodexParent :many
 SELECT DISTINCT ub.id, ub.session_id, ub.harness, ub.native_root_id, ub.initial_model_id, ub.state, ub.last_error_code, ub.updated_at, ub.provider_hint
 FROM usage_bindings ub
@@ -2149,6 +2218,47 @@ func (q *Queries) UpdateUsageSourceLifecycle(ctx context.Context, arg UpdateUsag
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const upsertModelUsageEventTiming = `-- name: UpsertModelUsageEventTiming :one
+INSERT INTO model_usage_event_timing (
+    event_id, round_seq, llm_ms, tool_ms, first_token_ms, created_at
+) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (event_id) DO UPDATE SET
+    round_seq      = excluded.round_seq,
+    llm_ms         = excluded.llm_ms,
+    tool_ms        = excluded.tool_ms,
+    first_token_ms = excluded.first_token_ms,
+    created_at     = excluded.created_at
+RETURNING event_id
+`
+
+type UpsertModelUsageEventTimingParams struct {
+	EventID      int64
+	RoundSeq     int64
+	LlmMs        sql.NullInt64
+	ToolMs       sql.NullInt64
+	FirstTokenMs sql.NullInt64
+	CreatedAt    time.Time
+}
+
+// One timing row per model_usage_events.id (Decision 2 of the timing ADR).
+// Written atomically with its event inside ApplyUsageChunk: an INSERT for a
+// newly written event, and an upsert when a replayed/replacement generation
+// re-derives the same logical event (the parent row identity does not change
+// across a rehome, so the timing row is refreshed in place).
+func (q *Queries) UpsertModelUsageEventTiming(ctx context.Context, arg UpsertModelUsageEventTimingParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, upsertModelUsageEventTiming,
+		arg.EventID,
+		arg.RoundSeq,
+		arg.LlmMs,
+		arg.ToolMs,
+		arg.FirstTokenMs,
+		arg.CreatedAt,
+	)
+	var event_id int64
+	err := row.Scan(&event_id)
+	return event_id, err
 }
 
 const upsertUsageBinding = `-- name: UpsertUsageBinding :one

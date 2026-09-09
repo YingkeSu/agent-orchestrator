@@ -213,6 +213,35 @@ type ModelUsageEvent struct {
 	SourceEventKey        string
 }
 
+// UsageEventTiming is the request-level timing fact captured at ingestion for
+// one native certified request (one model_usage_events row), per Decision 2 of
+// the timing ADR. SourceEventKey identifies the event; durations are
+// transcript-clock intervals between native record timestamps. A nil duration
+// means the bounding record was missing or predated capture (unknown, never
+// zero). RoundSeq is the durable round group ordinal assigned from certified
+// transcript prompt markers.
+type UsageEventTiming struct {
+	SourceEventKey string
+	RoundSeq       int64
+	LLMMS          *int64
+	ToolMS         *int64
+	FirstTokenMS   *int64
+}
+
+// UsageEventTimingRow is the request-log read model: one usage event with its
+// timing facts LEFT JOINed. A row with no timing facts carries RoundSeq 0 and
+// nil durations, which the caller renders as the unknown marker.
+type UsageEventTimingRow struct {
+	EventID        int64
+	BindingID      int64
+	CreatedAt      time.Time
+	SourceEventKey string
+	RoundSeq       int64
+	LLMMS          *int64
+	ToolMS         *int64
+	FirstTokenMS   *int64
+}
+
 // UsageCostCandidate is one still-total-null event selected for an exact
 // provider catalog attempt. Source facts remain immutable and are carried back
 // to storage as compare-and-swap guards.

@@ -346,6 +346,15 @@ type ModelUsageEvent struct {
 	BillingProviderSource sql.NullString
 }
 
+type ModelUsageEventTiming struct {
+	EventID      int64
+	RoundSeq     int64
+	LlmMs        sql.NullInt64
+	ToolMs       sql.NullInt64
+	FirstTokenMs sql.NullInt64
+	CreatedAt    time.Time
+}
+
 type Notification struct {
 	ID         string
 	SessionID  domain.SessionID
