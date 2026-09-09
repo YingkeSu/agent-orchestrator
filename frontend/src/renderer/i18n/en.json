@@ -1886,6 +1886,20 @@
 	"usage.log.source.claude_subagent": "Claude subagent",
 	"usage.log.source.codex_rollout": "Codex rollout",
 	"usage.log.source.kimi_wire": "Kimi wire",
-"usage.trendTitle": "Usage trend",
-	"usage.trendCost": "Cost"
+	"usage.trendTitle": "Usage trend",
+	"usage.trendCost": "Cost",
+	"inspector.runtime.title": "Usage & runtime",
+	"inspector.runtime.loading": "Loading runtime stats…",
+	"inspector.runtime.loadFailed": "Could not load runtime stats.",
+	"inspector.runtime.rounds_one": "{{count}} round",
+	"inspector.runtime.rounds_other": "{{count}} rounds",
+	"inspector.runtime.steps_one": "{{count}} step",
+	"inspector.runtime.steps_other": "{{count}} steps",
+	"inspector.runtime.llmTime": "LLM {{duration}}",
+	"inspector.runtime.toolTime": "tool calls {{duration}}",
+	"inspector.runtime.firstTokenAvg": "first token avg {{duration}}",
+	"inspector.runtime.firstTokenCoverage": "{{covered}} of {{total}} requests",
+	"inspector.runtime.tokensPerSecond": "{{count}} tok/s",
+	"inspector.runtime.cacheHitRate": "cache hit {{percent}}",
+	"inspector.runtime.totalTokens": "total {{count}} tok"
 }

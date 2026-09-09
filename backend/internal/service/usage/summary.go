@@ -178,7 +178,7 @@ func cacheHitRate(tokens domain.UsageTokenMetrics) *float64 {
 	return &rate
 }
 
-// SessionRuntimeStats returns the per-session runtime statistics read model
+// RuntimeStats returns the per-session runtime statistics read model
 // that backs the session stats bar (timing ADR #9). Token/cost totals and the
 // cache-hit rate come from usage events in both modes; timing figures are
 // derived at read time from the mode's own facts: conversation tables for chat

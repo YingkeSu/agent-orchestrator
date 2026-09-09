@@ -49,6 +49,11 @@ import {
 	type SessionPRSummary,
 } from "../hooks/useSessionScmSummary";
 import { useSessionUsage, type SessionUsage } from "../hooks/useSessionUsage";
+import {
+	useSessionRuntimeStats,
+	type SessionRuntimeStats,
+} from "../hooks/useSessionRuntimeStats";
+import { SessionRuntimeStatsBar } from "./SessionRuntimeStatsBar";
 import { useSessionWorkspaceFilesChangedCount } from "../hooks/useSessionWorkspaceFiles";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
@@ -273,14 +278,14 @@ const SummaryView = memo(function SummaryView({
 }) {
 	const { t } = useTranslation();
 	const query = useSessionScmSummary(session.id);
-	const developerMode = useUiStore((state) => state.developerMode);
-	const usageQuery = useSessionUsage(session.id, developerMode);
+	const usageQuery = useSessionUsage(session.id);
+	const runtimeQuery = useSessionRuntimeStats(session.id);
 	const showUsage =
-		developerMode &&
-		!usageQuery.isLoading &&
-		!usageQuery.isError &&
-		hasMeaningfulSessionUsage(usageQuery.data);
-	const showUsageError = developerMode && usageQuery.isError;
+		!usageQuery.isError && hasMeaningfulSessionUsage(usageQuery.data);
+	const showUsageError = usageQuery.isError;
+	const showRuntime =
+		!runtimeQuery.isError && hasRuntimeStatsFacts(runtimeQuery.data);
+	const showRuntimeError = runtimeQuery.isError;
 	const prSummaries = sessionPRDisplaySummaries(session, query.data);
 	const prSectionTitle = prSummaries.length > 1 ? t("inspector.pullRequests", { count: prSummaries.length }) : t("inspector.pullRequest");
 	const hasPRs = prSummaries.length > 0;
@@ -313,15 +318,24 @@ const SummaryView = memo(function SummaryView({
 			}
 			pullRequestTitle={prSectionTitle}
 			usage={
-				showUsageError ? (
-					<Section title={t("inspector.usage.title")}>
+				showRuntimeError ? (
+					<Section title={t("inspector.runtime.title")}>
 						<p className={inspectorEmptyClass} role="alert">
-							{t("inspector.usage.processedTokensUnavailable")}
+							{t("inspector.runtime.loadFailed")}
 						</p>
 					</Section>
-				) : showUsage && usageQuery.data ? (
-					<Section title={t("inspector.usage.title")}>
-						<UsageCostTelemetry usage={usageQuery.data} />
+				) : showRuntime || showUsage ? (
+					<Section title={t("inspector.runtime.title")}>
+						<div className="flex min-w-0 flex-col gap-3">
+							{runtimeQuery.data ? <SessionRuntimeStatsBar stats={runtimeQuery.data} /> : null}
+							{showUsageError ? (
+								<p className={inspectorEmptyClass} role="alert">
+									{t("inspector.usage.processedTokensUnavailable")}
+								</p>
+							) : showUsage && usageQuery.data ? (
+								<UsageCostTelemetry usage={usageQuery.data} />
+							) : null}
+						</div>
 					</Section>
 				) : null
 			}
@@ -935,11 +949,11 @@ const usageMetricKeys = [
 function usageScopes(usage: SessionUsage): SessionUsage["totals"][] {
 	return [
 		usage.totals,
-		...usage.harnesses.flatMap((harness) => [
+		...(usage.harnesses ?? []).flatMap((harness) => [
 			harness.totals,
-			...harness.models.map((model) => model.totals),
+			...(harness.models ?? []).map((model) => model.totals),
 		]),
-	];
+	].filter((totals) => totals != null);
 }
 
 function hasMeaningfulSessionUsage(usage?: SessionUsage): usage is SessionUsage {
@@ -947,6 +961,21 @@ function hasMeaningfulSessionUsage(usage?: SessionUsage): usage is SessionUsage 
 	return usageScopes(usage).some((totals) =>
 		totals.estimatedCost !== null || usageMetricKeys.some((key) => (totals[key] ?? 0) > 0),
 	);
+}
+
+// Any certified fact is worth showing the runtime section for: timing figures,
+// the cache-hit rate, or any token/cost total. A session with none (brand new,
+// never used) keeps the section absent rather than drawing a bar of markers.
+function hasRuntimeStatsFacts(stats?: SessionRuntimeStats): stats is SessionRuntimeStats {
+	if (!stats) return false;
+	const totals = stats.totals ?? {};
+	const known = (value: unknown) => value !== null && value !== undefined;
+	return known(stats.rounds) || known(stats.steps) || known(stats.llmMs) ||
+		known(stats.toolMs) || known(stats.firstTokenAvgMs) ||
+		known(stats.outputTokensPerSecond) || known(stats.cacheHitRate) ||
+		known(totals.processedTokens) || known(totals.estimatedCost) ||
+		known(totals.inputTokens) || known(totals.cachedInputTokens) ||
+		known(totals.uncachedInputTokens) || known(totals.outputTokens);
 }
 
 function formatTelemetryTokenValue(totalTokens: number): string {

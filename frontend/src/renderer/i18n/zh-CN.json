@@ -1848,6 +1848,20 @@
 	"usage.log.source.claude_subagent": "Claude 子代理",
 	"usage.log.source.codex_rollout": "Codex 回放",
 	"usage.log.source.kimi_wire": "Kimi 接口",
-"usage.trendTitle": "用量趋势",
-	"usage.trendCost": "成本"
+	"usage.trendTitle": "用量趋势",
+	"usage.trendCost": "成本",
+	"inspector.runtime.title": "用量与运行时",
+	"inspector.runtime.loading": "正在加载运行时统计…",
+	"inspector.runtime.loadFailed": "无法加载运行时统计。",
+	"inspector.runtime.rounds_one": "{{count}} 轮",
+	"inspector.runtime.rounds_other": "{{count}} 轮",
+	"inspector.runtime.steps_one": "{{count}} 步",
+	"inspector.runtime.steps_other": "{{count}} 步",
+	"inspector.runtime.llmTime": "LLM {{duration}}",
+	"inspector.runtime.toolTime": "工具调用 {{duration}}",
+	"inspector.runtime.firstTokenAvg": "首字平均 {{duration}}",
+	"inspector.runtime.firstTokenCoverage": "{{total}} 次请求中的 {{covered}} 次",
+	"inspector.runtime.tokensPerSecond": "{{count}} tok/s",
+	"inspector.runtime.cacheHitRate": "缓存命中 {{percent}}",
+	"inspector.runtime.totalTokens": "共 {{count}} tok"
 }
