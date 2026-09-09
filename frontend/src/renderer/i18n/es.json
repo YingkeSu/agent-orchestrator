@@ -1855,8 +1855,19 @@
 	"usage.emptyRange": "Sin uso en este rango.",
 	"usage.allModels": "Todos los modelos",
 	"usage.allSources": "Todas las fuentes",
+	"usage.attributionInferred": "Inferido",
+	"usage.attributionMixed": "Mixto",
+	"usage.col.avgCost": "Coste medio",
+	"usage.col.model": "Modelo",
+	"usage.col.provider": "Proveedor",
+	"usage.col.requests": "Solicitudes",
+	"usage.col.tokens": "Tokens",
+	"usage.col.totalCost": "Coste total",
 	"usage.sourceKind.claudeMain": "Claude",
 	"usage.sourceKind.claudeSubagent": "Claude subagente",
 	"usage.sourceKind.codexRollout": "Codex",
-	"usage.sourceKind.kimiWire": "Kimi"
+	"usage.sourceKind.kimiWire": "Kimi",
+	"usage.tab.models": "Estadísticas por modelo",
+	"usage.tab.providers": "Estadísticas por proveedor",
+	"usage.unattributed": "Sin atribuir"
 }

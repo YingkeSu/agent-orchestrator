@@ -13,6 +13,282 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const aggregateUsageByModel = `-- name: AggregateUsageByModel :many
+SELECT
+    mue.model_id AS group_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(mue.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(mue.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(mue.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(mue.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' THEN 1 END) AS INTEGER) AS observed_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' THEN 1 END) AS INTEGER) AS inferred_event_count,
+    CAST(COUNT(mue.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(mue.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(mue.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(mue.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(mue.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(mue.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM model_usage_events mue
+LEFT JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (?1 IS NULL OR mue.created_at >= ?1)
+  AND (?2 IS NULL OR mue.created_at <= ?2)
+  AND (?3 IS NULL OR us.kind = ?3)
+  AND (?4 IS NULL OR mue.model_id = ?4)
+GROUP BY mue.model_id
+ORDER BY mue.model_id
+`
+
+type AggregateUsageByModelParams struct {
+	From   interface{}
+	To     interface{}
+	Source interface{}
+	Model  interface{}
+}
+
+type AggregateUsageByModelRow struct {
+	GroupKey                      string
+	EventCount                    int64
+	InputTokens                   int64
+	KnownInputTokenCount          int64
+	CachedInputTokens             int64
+	KnownCachedInputTokenCount    int64
+	UncachedInputTokens           int64
+	KnownUncachedInputTokenCount  int64
+	OutputTokens                  int64
+	KnownOutputTokenCount         int64
+	PricedEventCount              int64
+	PricedTotalNanos              int64
+	ObservedCostEventCount        int64
+	InferredCostEventCount        int64
+	ObservedEventCount            int64
+	InferredEventCount            int64
+	KnownInputCount               int64
+	KnownInputNanos               int64
+	UnpricedKnownInputNanos       int64
+	KnownCachedInputCount         int64
+	KnownCachedInputNanos         int64
+	UnpricedKnownCachedInputNanos int64
+	KnownOutputCount              int64
+	KnownOutputNanos              int64
+	UnpricedKnownOutputNanos      int64
+}
+
+// Global per-model usage rollup over an optional created_at range with optional
+// source/model filters (the same optional filter params the summary accepts).
+// Every counter mirrors the summary aggregate per model: a summed metric is only
+// meaningful when every event in the group carried it, so the known_*_count
+// columns let the service drop any component that is not fully known. The
+// billing provider is a pricing input rather than a grouping key: a model stays
+// one row even when more than one provider served it.
+func (q *Queries) AggregateUsageByModel(ctx context.Context, arg AggregateUsageByModelParams) ([]AggregateUsageByModelRow, error) {
+	rows, err := q.db.QueryContext(ctx, aggregateUsageByModel,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AggregateUsageByModelRow{}
+	for rows.Next() {
+		var i AggregateUsageByModelRow
+		if err := rows.Scan(
+			&i.GroupKey,
+			&i.EventCount,
+			&i.InputTokens,
+			&i.KnownInputTokenCount,
+			&i.CachedInputTokens,
+			&i.KnownCachedInputTokenCount,
+			&i.UncachedInputTokens,
+			&i.KnownUncachedInputTokenCount,
+			&i.OutputTokens,
+			&i.KnownOutputTokenCount,
+			&i.PricedEventCount,
+			&i.PricedTotalNanos,
+			&i.ObservedCostEventCount,
+			&i.InferredCostEventCount,
+			&i.ObservedEventCount,
+			&i.InferredEventCount,
+			&i.KnownInputCount,
+			&i.KnownInputNanos,
+			&i.UnpricedKnownInputNanos,
+			&i.KnownCachedInputCount,
+			&i.KnownCachedInputNanos,
+			&i.UnpricedKnownCachedInputNanos,
+			&i.KnownOutputCount,
+			&i.KnownOutputNanos,
+			&i.UnpricedKnownOutputNanos,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const aggregateUsageByProvider = `-- name: AggregateUsageByProvider :many
+SELECT
+    COALESCE(mue.billing_provider_id, '') AS group_key,
+    CAST(COUNT(*) AS INTEGER) AS event_count,
+    CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COUNT(mue.input_tokens) AS INTEGER) AS known_input_token_count,
+    CAST(COALESCE(SUM(mue.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COUNT(mue.cached_input_tokens) AS INTEGER) AS known_cached_input_token_count,
+    CAST(COALESCE(SUM(mue.uncached_input_tokens), 0) AS INTEGER) AS uncached_input_tokens,
+    CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
+    CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
+    CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS observed_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' AND (
+        mue.estimated_cost_nanos IS NOT NULL OR mue.input_cost_nanos IS NOT NULL OR
+        mue.cached_input_cost_nanos IS NOT NULL OR mue.output_cost_nanos IS NOT NULL
+    ) THEN 1 END) AS INTEGER) AS inferred_cost_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' THEN 1 END) AS INTEGER) AS observed_event_count,
+    CAST(COUNT(CASE WHEN mue.billing_provider_source = 'inferred' THEN 1 END) AS INTEGER) AS inferred_event_count,
+    CAST(COUNT(mue.input_cost_nanos) AS INTEGER) AS known_input_count,
+    CAST(COALESCE(SUM(mue.input_cost_nanos), 0) AS INTEGER) AS known_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_input_nanos,
+    CAST(COUNT(mue.cached_input_cost_nanos) AS INTEGER) AS known_cached_input_count,
+    CAST(COALESCE(SUM(mue.cached_input_cost_nanos), 0) AS INTEGER) AS known_cached_input_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.cached_input_cost_nanos END), 0) AS INTEGER) AS unpriced_known_cached_input_nanos,
+    CAST(COUNT(mue.output_cost_nanos) AS INTEGER) AS known_output_count,
+    CAST(COALESCE(SUM(mue.output_cost_nanos), 0) AS INTEGER) AS known_output_nanos,
+    CAST(COALESCE(SUM(CASE WHEN mue.estimated_cost_nanos IS NULL THEN mue.output_cost_nanos END), 0) AS INTEGER) AS unpriced_known_output_nanos
+FROM model_usage_events mue
+LEFT JOIN usage_sources us ON us.id = mue.usage_source_id
+WHERE (?1 IS NULL OR mue.created_at >= ?1)
+  AND (?2 IS NULL OR mue.created_at <= ?2)
+  AND (?3 IS NULL OR us.kind = ?3)
+  AND (?4 IS NULL OR mue.model_id = ?4)
+GROUP BY COALESCE(mue.billing_provider_id, '')
+ORDER BY COALESCE(mue.billing_provider_id, '')
+`
+
+type AggregateUsageByProviderParams struct {
+	From   interface{}
+	To     interface{}
+	Source interface{}
+	Model  interface{}
+}
+
+type AggregateUsageByProviderRow struct {
+	GroupKey                      string
+	EventCount                    int64
+	InputTokens                   int64
+	KnownInputTokenCount          int64
+	CachedInputTokens             int64
+	KnownCachedInputTokenCount    int64
+	UncachedInputTokens           int64
+	KnownUncachedInputTokenCount  int64
+	OutputTokens                  int64
+	KnownOutputTokenCount         int64
+	PricedEventCount              int64
+	PricedTotalNanos              int64
+	ObservedCostEventCount        int64
+	InferredCostEventCount        int64
+	ObservedEventCount            int64
+	InferredEventCount            int64
+	KnownInputCount               int64
+	KnownInputNanos               int64
+	UnpricedKnownInputNanos       int64
+	KnownCachedInputCount         int64
+	KnownCachedInputNanos         int64
+	UnpricedKnownCachedInputNanos int64
+	KnownOutputCount              int64
+	KnownOutputNanos              int64
+	UnpricedKnownOutputNanos      int64
+}
+
+// Global per-billing-provider usage rollup over an optional created_at range
+// with optional source/model filters (the same optional filter params the
+// summary accepts). Events without a billing provider attribution
+// (billing_provider_id IS NULL) group into the empty-string bucket so request
+// counts and token totals never silently vanish from the provider view.
+func (q *Queries) AggregateUsageByProvider(ctx context.Context, arg AggregateUsageByProviderParams) ([]AggregateUsageByProviderRow, error) {
+	rows, err := q.db.QueryContext(ctx, aggregateUsageByProvider,
+		arg.From,
+		arg.To,
+		arg.Source,
+		arg.Model,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AggregateUsageByProviderRow{}
+	for rows.Next() {
+		var i AggregateUsageByProviderRow
+		if err := rows.Scan(
+			&i.GroupKey,
+			&i.EventCount,
+			&i.InputTokens,
+			&i.KnownInputTokenCount,
+			&i.CachedInputTokens,
+			&i.KnownCachedInputTokenCount,
+			&i.UncachedInputTokens,
+			&i.KnownUncachedInputTokenCount,
+			&i.OutputTokens,
+			&i.KnownOutputTokenCount,
+			&i.PricedEventCount,
+			&i.PricedTotalNanos,
+			&i.ObservedCostEventCount,
+			&i.InferredCostEventCount,
+			&i.ObservedEventCount,
+			&i.InferredEventCount,
+			&i.KnownInputCount,
+			&i.KnownInputNanos,
+			&i.UnpricedKnownInputNanos,
+			&i.KnownCachedInputCount,
+			&i.KnownCachedInputNanos,
+			&i.UnpricedKnownCachedInputNanos,
+			&i.KnownOutputCount,
+			&i.KnownOutputNanos,
+			&i.UnpricedKnownOutputNanos,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const aggregateUsageBySessionHarnessModel = `-- name: AggregateUsageBySessionHarnessModel :many
 SELECT
     ub.harness,

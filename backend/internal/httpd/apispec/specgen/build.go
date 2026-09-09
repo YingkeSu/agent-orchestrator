@@ -369,6 +369,11 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSessionUsageResponse":             "SessionUsageResponse",
 	"ControllersUsageSummaryQuery":                "UsageSummaryQuery",
 	"ControllersUsageSummaryResponse":             "UsageSummaryResponse",
+	"ControllersUsageAggregatesQuery":             "UsageAggregatesQuery",
+	"ControllersUsageModelStatsRow":               "UsageModelStatsRow",
+	"ControllersListUsageModelStatsResponse":      "ListUsageModelStatsResponse",
+	"ControllersUsageProviderStatsRow":            "UsageProviderStatsRow",
+	"ControllersListUsageProviderStatsResponse":   "ListUsageProviderStatsResponse",
 	// httpd/controllers — standalone shell terminal wire envelopes
 	"ControllersShellTerminalHandleIDParam":            "ShellTerminalHandleIDParam",
 	"ControllersOpenShellTerminalRequest":              "OpenShellTerminalRequest",
@@ -715,6 +720,28 @@ func usageOperations() []operation {
 			pathParams: []any{controllers.UsageSummaryQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.UsageSummaryResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/models", id: "getUsageModelStats", tag: "usage",
+			summary:    "Get per-model usage aggregates over an optional range with optional source/model filters",
+			pathParams: []any{controllers.UsageAggregatesQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListUsageModelStatsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/providers", id: "getUsageProviderStats", tag: "usage",
+			summary:    "Get per-billing-provider usage aggregates over an optional range with optional source/model filters",
+			pathParams: []any{controllers.UsageAggregatesQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListUsageProviderStatsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},

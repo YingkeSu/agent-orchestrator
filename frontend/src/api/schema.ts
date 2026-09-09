@@ -2318,6 +2318,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get per-model usage aggregates over an optional range with optional source/model filters */
+        get: operations["getUsageModelStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get per-billing-provider usage aggregates over an optional range with optional source/model filters */
+        get: operations["getUsageProviderStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/sessions": {
         parameters: {
             query?: never;
@@ -3389,6 +3423,12 @@ export interface components {
         ListShellTerminalsResponse: {
             shellTerminals: components["schemas"]["ShellTerminalResponse"][];
         };
+        ListUsageModelStatsResponse: {
+            models: components["schemas"]["UsageModelStatsRow"][];
+        };
+        ListUsageProviderStatsResponse: {
+            providers: components["schemas"]["UsageProviderStatsRow"][];
+        };
         ListWorkspaceFilesResponse: {
             ahead?: null | number;
             behind?: null | number;
@@ -4244,6 +4284,40 @@ export interface components {
         UsageModelResponse: {
             modelId: string;
             totals: components["schemas"]["UsageTotalsResponse"];
+        };
+        UsageModelStatsRow: {
+            /** @description Estimated total cost divided by request count. Null when cost or events are unknown. */
+            avgCostPerRequestNanos: null | number;
+            modelId: string;
+            /** @description Input plus output across the row. Null unless every event reported both. */
+            processedTokens: null | number;
+            /**
+             * Format: int64
+             * @description Count of usage events in the row (token-event granularity).
+             */
+            requestCount: number;
+            /** @description Estimated total cost in nano-USD. Null when the row has no known cost. */
+            totalCostNanos: null | number;
+        };
+        UsageProviderStatsRow: {
+            /**
+             * @description How the billing provider was reached (observed, inferred, or mixed). Null when the row carries no attribution.
+             * @enum {null|string}
+             */
+            attributionSource: "observed" | "inferred" | "mixed" | null;
+            /** @description Estimated total cost divided by request count. Null when cost or events are unknown. */
+            avgCostPerRequestNanos: null | number;
+            /** @description Billing catalog provider id. Empty groups events with no provider attribution. */
+            billingProviderId: string;
+            /** @description Input plus output across the row. Null unless every event reported both. */
+            processedTokens: null | number;
+            /**
+             * Format: int64
+             * @description Count of usage events in the row (token-event granularity).
+             */
+            requestCount: number;
+            /** @description Estimated total cost in nano-USD. Null when the row has no known cost. */
+            totalCostNanos: null | number;
         };
         UsageSummaryResponse: {
             /** @description Cached input / (cached + uncached input). Null when either component is unknown. */
@@ -12716,6 +12790,118 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemRequirementsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageModelStats: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower created_at bound (RFC 3339). */
+                from?: string;
+                /** @description Inclusive upper created_at bound (RFC 3339). */
+                to?: string;
+                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). Omit for all sources. */
+                source?: string;
+                /** @description Optional exact model id filter. Omit for all models. */
+                model?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListUsageModelStatsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageProviderStats: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower created_at bound (RFC 3339). */
+                from?: string;
+                /** @description Inclusive upper created_at bound (RFC 3339). */
+                to?: string;
+                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). Omit for all sources. */
+                source?: string;
+                /** @description Optional exact model id filter. Omit for all models. */
+                model?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListUsageProviderStatsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

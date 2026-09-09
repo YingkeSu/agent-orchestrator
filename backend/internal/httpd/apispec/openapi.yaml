@@ -6612,6 +6612,128 @@ paths:
       summary: Check local machine readiness (git, tmux, agent harness, gh)
       tags:
       - system
+  /api/v1/usage/models:
+    get:
+      operationId: getUsageModelStats
+      parameters:
+      - description: Inclusive lower created_at bound (RFC 3339).
+        in: query
+        name: from
+        schema:
+          description: Inclusive lower created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Inclusive upper created_at bound (RFC 3339).
+        in: query
+        name: to
+        schema:
+          description: Inclusive upper created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Optional usage source kind filter (claude_main, claude_subagent,
+          codex_rollout, kimi_wire). Omit for all sources.
+        in: query
+        name: source
+        schema:
+          description: Optional usage source kind filter (claude_main, claude_subagent,
+            codex_rollout, kimi_wire). Omit for all sources.
+          type: string
+      - description: Optional exact model id filter. Omit for all models.
+        in: query
+        name: model
+        schema:
+          description: Optional exact model id filter. Omit for all models.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListUsageModelStatsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get per-model usage aggregates over an optional range with optional
+        source/model filters
+      tags:
+      - usage
+  /api/v1/usage/providers:
+    get:
+      operationId: getUsageProviderStats
+      parameters:
+      - description: Inclusive lower created_at bound (RFC 3339).
+        in: query
+        name: from
+        schema:
+          description: Inclusive lower created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Inclusive upper created_at bound (RFC 3339).
+        in: query
+        name: to
+        schema:
+          description: Inclusive upper created_at bound (RFC 3339).
+          format: date-time
+          type: string
+      - description: Optional usage source kind filter (claude_main, claude_subagent,
+          codex_rollout, kimi_wire). Omit for all sources.
+        in: query
+        name: source
+        schema:
+          description: Optional usage source kind filter (claude_main, claude_subagent,
+            codex_rollout, kimi_wire). Omit for all sources.
+          type: string
+      - description: Optional exact model id filter. Omit for all models.
+        in: query
+        name: model
+        schema:
+          description: Optional exact model id filter. Omit for all models.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListUsageProviderStatsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get per-billing-provider usage aggregates over an optional range with
+        optional source/model filters
+      tags:
+      - usage
   /api/v1/usage/sessions:
     get:
       operationId: listCompactSessionUsage
@@ -9586,6 +9708,24 @@ components:
       required:
       - shellTerminals
       type: object
+    ListUsageModelStatsResponse:
+      properties:
+        models:
+          items:
+            $ref: '#/components/schemas/UsageModelStatsRow'
+          type: array
+      required:
+      - models
+      type: object
+    ListUsageProviderStatsResponse:
+      properties:
+        providers:
+          items:
+            $ref: '#/components/schemas/UsageProviderStatsRow'
+          type: array
+      required:
+      - providers
+      type: object
     ListWorkspaceFilesResponse:
       properties:
         ahead:
@@ -11781,6 +11921,93 @@ components:
       required:
       - modelId
       - totals
+      type: object
+    UsageModelStatsRow:
+      properties:
+        avgCostPerRequestNanos:
+          description: Estimated total cost divided by request count. Null when cost
+            or events are unknown.
+          minimum: 0
+          type:
+          - "null"
+          - number
+        modelId:
+          type: string
+        processedTokens:
+          description: Input plus output across the row. Null unless every event reported
+            both.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        requestCount:
+          description: Count of usage events in the row (token-event granularity).
+          format: int64
+          minimum: 0
+          type: integer
+        totalCostNanos:
+          description: Estimated total cost in nano-USD. Null when the row has no
+            known cost.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+      required:
+      - modelId
+      - requestCount
+      - processedTokens
+      - totalCostNanos
+      - avgCostPerRequestNanos
+      type: object
+    UsageProviderStatsRow:
+      properties:
+        attributionSource:
+          description: How the billing provider was reached (observed, inferred, or
+            mixed). Null when the row carries no attribution.
+          enum:
+          - observed
+          - inferred
+          - mixed
+          type:
+          - "null"
+          - string
+        avgCostPerRequestNanos:
+          description: Estimated total cost divided by request count. Null when cost
+            or events are unknown.
+          minimum: 0
+          type:
+          - "null"
+          - number
+        billingProviderId:
+          description: Billing catalog provider id. Empty groups events with no provider
+            attribution.
+          type: string
+        processedTokens:
+          description: Input plus output across the row. Null unless every event reported
+            both.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        requestCount:
+          description: Count of usage events in the row (token-event granularity).
+          format: int64
+          minimum: 0
+          type: integer
+        totalCostNanos:
+          description: Estimated total cost in nano-USD. Null when the row has no
+            known cost.
+          minimum: 0
+          type:
+          - "null"
+          - integer
+      required:
+      - billingProviderId
+      - attributionSource
+      - requestCount
+      - processedTokens
+      - totalCostNanos
+      - avgCostPerRequestNanos
       type: object
     UsageSummaryResponse:
       properties:

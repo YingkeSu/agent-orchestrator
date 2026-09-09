@@ -23,6 +23,17 @@ type usageSummaryStoreStub struct {
 	globalSource string
 	globalModel  string
 	calls        [6]int
+
+	modelRows      []domain.UsageModelScopeAggregate
+	providerRows   []domain.UsageProviderScopeAggregate
+	modelFrom      *time.Time
+	modelTo        *time.Time
+	modelSource    string
+	modelModel     string
+	providerFrom   *time.Time
+	providerTo     *time.Time
+	providerSource string
+	providerModel  string
 }
 
 func (s *usageSummaryStoreStub) ListCompactSessionUsageAggregates(_ context.Context, id domain.ProjectID) ([]domain.CompactSessionUsageAggregate, error) {

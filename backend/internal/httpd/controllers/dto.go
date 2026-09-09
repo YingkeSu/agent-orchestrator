@@ -1426,6 +1426,56 @@ type UsageSummaryResponse struct {
 	Models       []string            `json:"models" description:"Distinct model ids present in the filtered range."`
 }
 
+// UsageAggregatesQuery is the query string accepted by the per-model and
+// per-provider aggregate endpoints. from/to bound the created_at range
+// (inclusive, RFC 3339); omitting either leaves that side unbounded. source
+// filters by usage source kind (claude_main, claude_subagent, codex_rollout,
+// kimi_wire) and model by exact model id; omitting either leaves that filter
+// unbounded, matching the optional filter params the summary accepts.
+type UsageAggregatesQuery struct {
+	From   string `query:"from,omitempty" description:"Inclusive lower created_at bound (RFC 3339)." format:"date-time"`
+	To     string `query:"to,omitempty" description:"Inclusive upper created_at bound (RFC 3339)." format:"date-time"`
+	Source string `query:"source,omitempty" description:"Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). Omit for all sources."`
+	Model  string `query:"model,omitempty" description:"Optional exact model id filter. Omit for all models."`
+}
+
+// UsageModelStatsRow is one per-model aggregate row. processedTokens is the
+// canonical input plus output across the row, null unless every event reported
+// both. totalCostNanos is the scope estimate (an estimated lower bound when
+// some events are unpriced), null when the row has no known cost.
+// avgCostPerRequestNanos is totalCostNanos divided by requestCount, null when
+// there is no known cost or no events.
+type UsageModelStatsRow struct {
+	ModelID                    string   `json:"modelId"`
+	RequestCount               int64    `json:"requestCount" minimum:"0" description:"Count of usage events in the row (token-event granularity)."`
+	ProcessedTokens            *int64   `json:"processedTokens" minimum:"0" description:"Input plus output across the row. Null unless every event reported both."`
+	TotalCostNanos             *int64   `json:"totalCostNanos" minimum:"0" description:"Estimated total cost in nano-USD. Null when the row has no known cost."`
+	AverageCostPerRequestNanos *float64 `json:"avgCostPerRequestNanos" minimum:"0" description:"Estimated total cost divided by request count. Null when cost or events are unknown."`
+}
+
+// ListUsageModelStatsResponse is the per-model aggregate table payload.
+type ListUsageModelStatsResponse struct {
+	Models []UsageModelStatsRow `json:"models"`
+}
+
+// UsageProviderStatsRow is one per-billing-provider aggregate row.
+// attributionSource reports how the row's billing provider was reached so
+// inferred rows display honestly; it is null for events with no billing
+// provider attribution (the empty billingProviderId bucket).
+type UsageProviderStatsRow struct {
+	BillingProviderID          string   `json:"billingProviderId" description:"Billing catalog provider id. Empty groups events with no provider attribution."`
+	AttributionSource          *string  `json:"attributionSource" enum:"observed,inferred,mixed" description:"How the billing provider was reached (observed, inferred, or mixed). Null when the row carries no attribution."`
+	RequestCount               int64    `json:"requestCount" minimum:"0" description:"Count of usage events in the row (token-event granularity)."`
+	ProcessedTokens            *int64   `json:"processedTokens" minimum:"0" description:"Input plus output across the row. Null unless every event reported both."`
+	TotalCostNanos             *int64   `json:"totalCostNanos" minimum:"0" description:"Estimated total cost in nano-USD. Null when the row has no known cost."`
+	AverageCostPerRequestNanos *float64 `json:"avgCostPerRequestNanos" minimum:"0" description:"Estimated total cost divided by request count. Null when cost or events are unknown."`
+}
+
+// ListUsageProviderStatsResponse is the per-provider aggregate table payload.
+type ListUsageProviderStatsResponse struct {
+	Providers []UsageProviderStatsRow `json:"providers"`
+}
+
 // SystemRequirementsResponse is the body of GET /api/v1/system/requirements.
 type SystemRequirementsResponse = systemcheck.Report
 

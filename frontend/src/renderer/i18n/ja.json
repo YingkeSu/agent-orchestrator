@@ -1831,8 +1831,19 @@
 	"usage.emptyRange": "この期間の利用はありません。",
 	"usage.allModels": "すべてのモデル",
 	"usage.allSources": "すべてのソース",
+	"usage.attributionInferred": "推定",
+	"usage.attributionMixed": "混合",
+	"usage.col.avgCost": "平均コスト",
+	"usage.col.model": "モデル",
+	"usage.col.provider": "プロバイダー",
+	"usage.col.requests": "リクエスト",
+	"usage.col.tokens": "トークン",
+	"usage.col.totalCost": "合計コスト",
 	"usage.sourceKind.claudeMain": "Claude",
 	"usage.sourceKind.claudeSubagent": "Claude サブエージェント",
 	"usage.sourceKind.codexRollout": "Codex",
-	"usage.sourceKind.kimiWire": "Kimi"
+	"usage.sourceKind.kimiWire": "Kimi",
+	"usage.tab.models": "モデル統計",
+	"usage.tab.providers": "プロバイダー統計",
+	"usage.unattributed": "未帰属"
 }
