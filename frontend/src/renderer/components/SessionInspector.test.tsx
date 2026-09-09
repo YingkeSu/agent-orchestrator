@@ -810,7 +810,7 @@ describe("SessionInspector usage", () => {
 
 	const tokenTotals = (estimatedCost: unknown) => ({ ...canonicalTotals, estimatedCost });
 
-	function mockUsage(estimatedCost: unknown, harnesses?: unknown[]) {
+	function mockUsage(estimatedCost: unknown, harnesses?: unknown[], stats?: unknown) {
 		const totals = tokenTotals(estimatedCost);
 		getMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/usage/sessions/{sessionId}") {
@@ -833,16 +833,32 @@ describe("SessionInspector usage", () => {
 					error: undefined,
 				};
 			}
+			if (path === "/api/v1/usage/sessions/{sessionId}/stats") {
+				return {
+					data: stats ?? {
+						sessionId: "sess-1",
+						rounds: 11,
+						steps: 117,
+						llmMs: 1_217_000,
+						toolMs: 503_000,
+						firstTokenAvgMs: 4000,
+						firstTokenCoverage: { covered: 12, total: 15 },
+						outputTokensPerSecond: 84,
+						cacheHitRate: 0.97,
+						totals,
+					},
+					error: undefined,
+				};
+			}
 			return { data: undefined };
 		});
 	}
 
-	it("shows detailed token statistics only when Developer Mode is enabled", async () => {
-		useUiStore.getState().setDeveloperMode(true);
+	it("shows the runtime stats bar and token statistics without Developer Mode", async () => {
 		mockUsage(null);
 
 		renderWithQuery(<SessionInspector session={session([])} />);
-		expect(await screen.findByText("Usage & cost")).toBeInTheDocument();
+		expect(await screen.findByText("Usage & runtime")).toBeInTheDocument();
 		expect(screen.getByText("Tokens processed")).toBeInTheDocument();
 		expect(screen.getByLabelText("1,500 tokens processed")).toBeInTheDocument();
 		expect(screen.getByText("Estimated cost").parentElement?.nextElementSibling).toHaveTextContent("Unavailable");
@@ -868,8 +884,100 @@ describe("SessionInspector usage", () => {
 		expect(within(details).queryByText("Cost")).not.toBeInTheDocument();
 	});
 
+	it("shows unknown markers for a timing-less session while tokens still render", async () => {
+		const totals = tokenTotals(null);
+		mockUsage(null, undefined, {
+			sessionId: "sess-1",
+			rounds: null,
+			steps: 117,
+			llmMs: null,
+			toolMs: null,
+			firstTokenAvgMs: null,
+			firstTokenCoverage: { covered: 0, total: 0 },
+			outputTokensPerSecond: null,
+			cacheHitRate: null,
+			totals,
+		});
+
+		renderWithQuery(<SessionInspector session={session([])} />);
+
+		const bar = await screen.findByTestId("session-runtime-stats");
+		expect(bar).toHaveTextContent("117 steps");
+		expect(bar).toHaveTextContent("LLM —");
+		expect(bar).toHaveTextContent("tool calls —");
+		expect(bar).toHaveTextContent("first token avg —");
+		expect(bar).toHaveTextContent("— tok/s");
+		expect(bar).toHaveTextContent("cache hit —");
+		// Unknown is a dash, never a fabricated zero.
+		expect(bar).not.toHaveTextContent("0 rounds");
+	});
+
+	it("renders the runtime section even when only usage facts exist", async () => {
+		mockUsage(null, undefined, {
+			sessionId: "sess-1",
+			rounds: null,
+			steps: null,
+			llmMs: null,
+			toolMs: null,
+			firstTokenAvgMs: null,
+			firstTokenCoverage: { covered: 0, total: 0 },
+			outputTokensPerSecond: null,
+			cacheHitRate: null,
+			totals: tokenTotals(null),
+		});
+
+		renderWithQuery(<SessionInspector session={session([])} />);
+
+		const section = (await screen.findByText("Usage & runtime")).closest(
+			"[data-testid='inspector-section']",
+		) as HTMLElement;
+		expect(within(section).getByTestId("session-runtime-stats")).toBeInTheDocument();
+	});
+
+	it("reports a runtime stats failure as an alert", async () => {
+		const commonGets = commonGetsResponder();
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/usage/sessions/{sessionId}/stats") {
+				return { data: undefined, error: { message: "boom" } };
+			}
+			return commonGets(path);
+		});
+
+		renderWithQuery(<SessionInspector session={session([])} />);
+		// The hook retries once before surfacing the error.
+		expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent("Could not load runtime stats.");
+	});
+
+	it("keeps the runtime section absent for an empty session", async () => {
+		mockUsage(null, undefined, {
+			sessionId: "sess-1",
+			rounds: null,
+			steps: null,
+			llmMs: null,
+			toolMs: null,
+			firstTokenAvgMs: null,
+			firstTokenCoverage: { covered: 0, total: 0 },
+			outputTokensPerSecond: null,
+			cacheHitRate: null,
+			totals: {
+				inputTokens: null,
+				cachedInputTokens: null,
+				uncachedInputTokens: null,
+				outputTokens: null,
+				processedTokens: null,
+				cacheReadTokens: null,
+				estimatedCost: null,
+			},
+		});
+
+		renderWithQuery(<SessionInspector session={session([])} />);
+		await waitFor(() => {
+			expect(screen.queryByTestId("session-runtime-stats")).not.toBeInTheDocument();
+		});
+		expect(screen.queryByText("Usage & runtime")).not.toBeInTheDocument();
+	});
+
 	it("shows icon disclosures without repeated metrics when multiple agents contributed", async () => {
-		useUiStore.getState().setDeveloperMode(true);
 		const totals = { ...canonicalTotals, estimatedCost: null };
 		mockUsage(null, [
 			{ harness: "codex", totals, models: [{ modelId: "gpt-5.5", totals }] },
@@ -922,7 +1030,7 @@ describe("SessionInspector usage", () => {
 
 		renderWithQuery(<SessionInspector session={session([])} />);
 
-		const section = (await screen.findByText("Usage & cost")).closest(
+		const section = (await screen.findByText("Usage & runtime")).closest(
 			"[data-testid='inspector-section']",
 		) as HTMLElement;
 		// The value carries no coverage qualifier, and the disclosure beside the
@@ -953,7 +1061,7 @@ describe("SessionInspector usage", () => {
 
 		renderWithQuery(<SessionInspector session={session([])} />);
 
-		const section = (await screen.findByText("Usage & cost")).closest(
+		const section = (await screen.findByText("Usage & runtime")).closest(
 			"[data-testid='inspector-section']",
 		) as HTMLElement;
 		expect(within(section).getAllByText("$1.24").length).toBeGreaterThan(0);
@@ -977,7 +1085,7 @@ describe("SessionInspector usage", () => {
 		});
 
 		renderWithQuery(<SessionInspector session={session([])} />);
-		const section = (await screen.findByText("Usage & cost")).closest(
+		const section = (await screen.findByText("Usage & runtime")).closest(
 			"[data-testid='inspector-section']",
 		) as HTMLElement;
 		await userEvent.hover(within(section).getByRole("button", { name: "About estimated cost" }));
@@ -1001,7 +1109,7 @@ describe("SessionInspector usage", () => {
 
 		renderWithQuery(<SessionInspector session={session([])} />);
 
-		const section = (await screen.findByText("Usage & cost")).closest(
+		const section = (await screen.findByText("Usage & runtime")).closest(
 			"[data-testid='inspector-section']",
 		) as HTMLElement;
 		expect(within(section).getAllByText("$0.007").length).toBeGreaterThan(0);
@@ -1027,7 +1135,7 @@ describe("SessionInspector usage", () => {
 
 		renderWithQuery(<SessionInspector session={session([])} />);
 
-		const section = (await screen.findByText("Usage & cost")).closest(
+		const section = (await screen.findByText("Usage & runtime")).closest(
 			"[data-testid='inspector-section']",
 		) as HTMLElement;
 		// The header row's parent is the list container holding every agent row.
@@ -1058,7 +1166,7 @@ describe("SessionInspector usage", () => {
 
 		renderWithQuery(<SessionInspector session={session([])} />);
 
-		const section = (await screen.findByText("Usage & cost")).closest(
+		const section = (await screen.findByText("Usage & runtime")).closest(
 			"[data-testid='inspector-section']",
 		) as HTMLElement;
 		// The header row's parent is the list container holding every agent row.
@@ -1075,7 +1183,7 @@ describe("SessionInspector usage", () => {
 
 		renderWithQuery(<SessionInspector session={session([])} />);
 
-		const section = (await screen.findByText("Usage & cost")).closest(
+		const section = (await screen.findByText("Usage & runtime")).closest(
 			"[data-testid='inspector-section']",
 		) as HTMLElement;
 		expect(within(section).getAllByText("Unavailable").length).toBeGreaterThan(0);

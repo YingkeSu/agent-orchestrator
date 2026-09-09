@@ -367,6 +367,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUsageModelResponse":               "UsageModelResponse",
 	"ControllersUsageHarnessResponse":             "UsageHarnessResponse",
 	"ControllersSessionUsageResponse":             "SessionUsageResponse",
+	"ControllersFirstTokenCoverageResponse":       "FirstTokenCoverageResponse",
+	"ControllersSessionRuntimeStatsResponse":      "SessionRuntimeStatsResponse",
 	"ControllersUsageSummaryQuery":                "UsageSummaryQuery",
 	"ControllersUsageSummaryResponse":             "UsageSummaryResponse",
 	"ControllersUsageAggregatesQuery":             "UsageAggregatesQuery",
@@ -712,6 +714,17 @@ func usageOperations() []operation {
 			pathParams: []any{controllers.SessionIDParam{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SessionUsageResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/sessions/{sessionId}/stats", id: "getSessionRuntimeStats", tag: "usage",
+			summary:    "Get per-session runtime statistics (rounds, steps, durations, first-token, tok/s, token totals)",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SessionRuntimeStatsResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},

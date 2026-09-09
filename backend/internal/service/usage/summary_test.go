@@ -2,11 +2,13 @@ package usage
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 type usageSummaryStoreStub struct {
@@ -40,13 +42,18 @@ type usageSummaryStoreStub struct {
 	providerTo     *time.Time
 	providerSource string
 	providerModel  string
-	logRows        []domain.UsageRequestLogEntry
-	logFrom        *time.Time
-	logTo          *time.Time
-	logSource      string
-	logModel       string
-	logBefore      *int64
-	logLimit       int64
+
+	logRows   []domain.UsageRequestLogEntry
+	logFrom   *time.Time
+	logTo     *time.Time
+	logSource string
+	logModel  string
+	logBefore *int64
+	logLimit  int64
+
+	runtimeAgg  domain.SessionRuntimeTimingAggregate
+	chatTurns   []domain.ConversationRuntimeTurnFact
+	runtimeCall int
 }
 
 func (s *usageSummaryStoreStub) ListCompactSessionUsageAggregates(_ context.Context, id domain.ProjectID) ([]domain.CompactSessionUsageAggregate, error) {
@@ -82,6 +89,14 @@ func (s *usageSummaryStoreStub) AggregateUsageTrend(_ context.Context, from, to 
 	s.calls[5]++
 	s.trendFrom, s.trendTo, s.trendSecs, s.trendSrc, s.trendModel = from, to, seconds, source, model
 	return s.trend, nil
+}
+func (s *usageSummaryStoreStub) AggregateSessionRuntimeTiming(context.Context, domain.SessionID) (domain.SessionRuntimeTimingAggregate, error) {
+	s.runtimeCall++
+	return s.runtimeAgg, nil
+}
+func (s *usageSummaryStoreStub) ListConversationRuntimeTurnFacts(context.Context, domain.SessionID) ([]domain.ConversationRuntimeTurnFact, error) {
+	s.runtimeCall++
+	return s.chatTurns, nil
 }
 
 func TestSummaryReaderListCompactUsesOneBatchRead(t *testing.T) {
@@ -505,5 +520,201 @@ func TestSummaryReaderListRequestLogClampsLimit(t *testing.T) {
 	}
 	if store.logLimit != maxRequestLogPageSize {
 		t.Fatalf("oversize limit clamped to %d, want %d", store.logLimit, maxRequestLogPageSize)
+	}
+}
+
+func TestSummaryReaderRuntimeStatsNativeFullData(t *testing.T) {
+	llm, tool, firstSum, rateTokens, rateLLM := int64(1_217_000), int64(503_000), int64(48_000), int64(1_680), int64(20_000)
+	store := &usageSummaryStoreStub{
+		found:   true,
+		session: domain.SessionRecord{ID: "reverb-12", Mode: domain.SessionModeTUI},
+		models: []domain.UsageModelAggregate{{
+			Harness: domain.HarnessCodex, ModelID: "gpt-5.6",
+			Tokens: testUsageMetrics(3_000_000, 2_910_000, 90_000, 3_300_000),
+			Cost:   completeCostAggregate(15, 300, 100, 50, 150),
+		}},
+		runtimeAgg: domain.SessionRuntimeTimingAggregate{
+			StepCount: 15, TimingRowCount: 15, RoundCount: 11,
+			LLMMSTotal: &llm, ToolMSTotal: &tool,
+			FirstTokenMSSum: &firstSum, FirstTokenKnown: 12,
+			RateOutputTokens: &rateTokens, RateLLMMS: &rateLLM,
+		},
+	}
+
+	got, err := NewSummaryReader(store).RuntimeStats(context.Background(), "reverb-12")
+	mustNoError(t, err)
+	if got.Rounds == nil || *got.Rounds != 11 || got.Steps == nil || *got.Steps != 15 ||
+		got.LLMMS == nil || *got.LLMMS != 1_217_000 || got.ToolMS == nil || *got.ToolMS != 503_000 {
+		t.Fatalf("timing = %+v", got)
+	}
+	if got.FirstTokenAvgMS == nil || *got.FirstTokenAvgMS != 4000 ||
+		got.FirstTokenCoverage != (domain.FirstTokenCoverage{Covered: 12, Total: 15}) {
+		t.Fatalf("first token = %+v coverage %+v", got.FirstTokenAvgMS, got.FirstTokenCoverage)
+	}
+	// Ratio of sums: 1,680 output tokens / (20,000 ms / 1000) = 84 tok/s.
+	if got.OutputTokensPerSecond == nil || *got.OutputTokensPerSecond != 84 {
+		t.Fatalf("tok/s = %+v, want 84", got.OutputTokensPerSecond)
+	}
+	if got.CacheHitRate == nil || *got.CacheHitRate != 2_910_000.0/3_000_000.0 {
+		t.Fatalf("cache hit = %+v", got.CacheHitRate)
+	}
+	if got.Totals.ProcessedTokens == nil || *got.Totals.ProcessedTokens != 6_300_000 ||
+		got.Totals.EstimatedCost == nil || got.Totals.EstimatedCost.TotalNanos != 300 {
+		t.Fatalf("totals = %+v", got.Totals)
+	}
+	if store.runtimeCall != 1 {
+		t.Fatalf("runtime store calls = %d, want 1", store.runtimeCall)
+	}
+}
+
+func TestSummaryReaderRuntimeStatsNativeTimingLessKeepsTokens(t *testing.T) {
+	store := &usageSummaryStoreStub{
+		found:   true,
+		session: domain.SessionRecord{ID: "legacy", Mode: domain.SessionModeTUI},
+		models: []domain.UsageModelAggregate{{
+			Harness: domain.HarnessClaudeCode, ModelID: "claude-sonnet",
+			Tokens: testUsageMetrics(1000, 400, 600, 200),
+			Cost:   completeCostAggregate(3, 60, 30, 10, 20),
+		}},
+		// Pre-deployment events carry tokens but no timing rows at all.
+		runtimeAgg: domain.SessionRuntimeTimingAggregate{StepCount: 3, TimingRowCount: 0},
+	}
+
+	got, err := NewSummaryReader(store).RuntimeStats(context.Background(), "legacy")
+	mustNoError(t, err)
+	if got.Steps == nil || *got.Steps != 3 {
+		t.Fatalf("steps = %+v, want 3 (events exist)", got.Steps)
+	}
+	// Unknowns must be nil, never zero.
+	if got.Rounds != nil || got.LLMMS != nil || got.ToolMS != nil ||
+		got.FirstTokenAvgMS != nil || got.OutputTokensPerSecond != nil {
+		t.Fatalf("timing-less timing fields = %+v, want all nil", got)
+	}
+	if got.Totals.ProcessedTokens == nil || *got.Totals.ProcessedTokens != 1200 ||
+		got.Totals.EstimatedCost == nil || got.Totals.EstimatedCost.TotalNanos != 60 {
+		t.Fatalf("token/cost totals = %+v, want preserved", got.Totals)
+	}
+	if got.CacheHitRate == nil || *got.CacheHitRate != 400.0/1000.0 {
+		t.Fatalf("cache hit = %+v, want 0.4", got.CacheHitRate)
+	}
+}
+
+func TestSummaryReaderRuntimeStatsNativeEmptySession(t *testing.T) {
+	store := &usageSummaryStoreStub{
+		found:      true,
+		session:    domain.SessionRecord{ID: "empty", Mode: domain.SessionModeTUI},
+		runtimeAgg: domain.SessionRuntimeTimingAggregate{},
+	}
+
+	got, err := NewSummaryReader(store).RuntimeStats(context.Background(), "empty")
+	mustNoError(t, err)
+	if got.Rounds != nil || got.Steps != nil || got.LLMMS != nil || got.ToolMS != nil ||
+		got.FirstTokenAvgMS != nil || got.OutputTokensPerSecond != nil ||
+		got.CacheHitRate != nil || got.Totals.ProcessedTokens != nil {
+		t.Fatalf("empty session stats = %+v, want all unknown", got)
+	}
+}
+
+func TestSummaryReaderRuntimeStatsUnknownSession(t *testing.T) {
+	store := &usageSummaryStoreStub{found: false}
+	_, err := NewSummaryReader(store).RuntimeStats(context.Background(), "missing")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Kind != apierr.KindNotFound {
+		t.Fatalf("err = %v, want not found", err)
+	}
+}
+
+func TestSummaryReaderRuntimeStatsChat(t *testing.T) {
+	started := time.Date(2026, 8, 23, 12, 0, 5, 0, time.UTC)
+	completed := time.Date(2026, 8, 23, 12, 20, 22, 0, time.UTC)
+	firstToken := int64(4000)
+	secondTurn := completed.Add(time.Minute)
+	store := &usageSummaryStoreStub{
+		found:   true,
+		session: domain.SessionRecord{ID: "chat-1", Mode: domain.SessionModeChat},
+		models: []domain.UsageModelAggregate{{
+			Harness: domain.HarnessCodex, ModelID: "gpt-5.6",
+			Tokens: testUsageMetrics(1000, 400, 600, 200),
+		}},
+		chatTurns: []domain.ConversationRuntimeTurnFact{
+			{
+				TurnID: "turn-1", State: domain.TurnStateCompleted,
+				RequestedAt: time.Date(2026, 8, 23, 12, 0, 1, 0, time.UTC),
+				StartedAt:   &started, CompletedAt: &completed,
+				FirstTokenDeltaMS: &firstToken,
+				ToolMS:            503_000, ToolKnown: true, AssistantCount: 4, PromptBearing: true,
+			},
+			{
+				TurnID: "turn-2", State: domain.TurnStateCompleted,
+				RequestedAt: time.Date(2026, 8, 23, 12, 21, 0, 0, time.UTC),
+				StartedAt:   &secondTurn, CompletedAt: &secondTurn,
+				FirstTokenDeltaMS: nil, // first content not captured
+				ToolMS:            0, ToolKnown: false, AssistantCount: 3, PromptBearing: true,
+			},
+			{
+				// A provider-adopted daemon turn (compaction) is not a round.
+				TurnID: "turn-c", State: domain.TurnStateCompleted,
+				RequestedAt: time.Date(2026, 8, 23, 13, 0, 0, 0, time.UTC),
+				StartedAt:   &secondTurn, CompletedAt: &secondTurn,
+				ToolMS: 10_000, ToolKnown: true, AssistantCount: 1, PromptBearing: false,
+			},
+		},
+	}
+
+	got, err := NewSummaryReader(store).RuntimeStats(context.Background(), "chat-1")
+	mustNoError(t, err)
+	if got.Rounds == nil || *got.Rounds != 2 || got.Steps == nil || *got.Steps != 8 {
+		t.Fatalf("rounds/steps = %+v/%+v, want 2/8", got.Rounds, got.Steps)
+	}
+	// LLM remainder per turn: wall (20m17s = 1,217,000ms) minus tool 503,000ms
+	// for turn-1; turn-2 is a zero-length terminal turn; the daemon turn's tool
+	// time contributes to toolMs but not to rounds.
+	wantLLM := int64(1_217_000 - 503_000)
+	if got.LLMMS == nil || *got.LLMMS != wantLLM {
+		t.Fatalf("llm = %+v, want %d", got.LLMMS, wantLLM)
+	}
+	if got.ToolMS == nil || *got.ToolMS != 503_000+10_000 {
+		t.Fatalf("tool = %+v, want 513000", got.ToolMS)
+	}
+	if got.FirstTokenAvgMS == nil || *got.FirstTokenAvgMS != 4000 ||
+		got.FirstTokenCoverage != (domain.FirstTokenCoverage{Covered: 1, Total: 2}) {
+		t.Fatalf("first token = %+v coverage %+v", got.FirstTokenAvgMS, got.FirstTokenCoverage)
+	}
+	// Chat sessions carry no per-request output token counts, so tok/s is
+	// unknown, never zero.
+	if got.OutputTokensPerSecond != nil {
+		t.Fatalf("chat tok/s = %+v, want nil", got.OutputTokensPerSecond)
+	}
+	if got.Totals.ProcessedTokens == nil || *got.Totals.ProcessedTokens != 1200 {
+		t.Fatalf("totals = %+v", got.Totals)
+	}
+}
+
+func TestSummaryReaderRuntimeStatsChatNegativeLLMRemainderIsUnknown(t *testing.T) {
+	started := time.Date(2026, 8, 23, 12, 0, 5, 0, time.UTC)
+	completed := time.Date(2026, 8, 23, 12, 0, 20, 0, time.UTC)
+	// Tool elapsed (503s) far exceeds the short wall time: the LLM remainder is
+	// negative and must be treated as unknown, never reported.
+	store := &usageSummaryStoreStub{
+		found:   true,
+		session: domain.SessionRecord{ID: "chat-2", Mode: domain.SessionModeChat},
+		chatTurns: []domain.ConversationRuntimeTurnFact{{
+			TurnID: "turn-1", State: domain.TurnStateCompleted,
+			RequestedAt: time.Date(2026, 8, 23, 12, 0, 1, 0, time.UTC),
+			StartedAt:   &started, CompletedAt: &completed,
+			ToolMS: 503_000, ToolKnown: true, AssistantCount: 1, PromptBearing: true,
+		}},
+	}
+
+	got, err := NewSummaryReader(store).RuntimeStats(context.Background(), "chat-2")
+	mustNoError(t, err)
+	if got.LLMMS != nil {
+		t.Fatalf("llm = %+v, want nil for negative remainder", got.LLMMS)
+	}
+	if got.ToolMS == nil || *got.ToolMS != 503_000 {
+		t.Fatalf("tool = %+v, want 503000", got.ToolMS)
+	}
+	if got.Rounds == nil || *got.Rounds != 1 {
+		t.Fatalf("rounds = %+v, want 1", got.Rounds)
 	}
 }

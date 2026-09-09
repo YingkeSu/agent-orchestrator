@@ -2403,6 +2403,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/sessions/{sessionId}/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get per-session runtime statistics (rounds, steps, durations, first-token, tok/s, token totals) */
+        get: operations["getSessionRuntimeStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/summary": {
         parameters: {
             query?: never;
@@ -3342,6 +3359,18 @@ export interface components {
             session: components["schemas"]["ControllersSessionView"];
             sessionId: string;
         };
+        FirstTokenCoverageResponse: {
+            /**
+             * Format: int64
+             * @description Requests whose first-token latency was captured.
+             */
+            covered: number;
+            /**
+             * Format: int64
+             * @description Requests that could have carried a first-token latency.
+             */
+            total: number;
+        };
         GitPreparationEvent: {
             /** @enum {string} */
             action: "git_init" | "git_commit" | "set_remote";
@@ -4026,6 +4055,25 @@ export interface components {
         };
         SessionResponse: {
             session: components["schemas"]["ControllersSessionView"];
+        };
+        SessionRuntimeStatsResponse: {
+            /** @description Cached input / (cached + uncached input). Null when either component is unknown. */
+            cacheHitRate: null | number;
+            /** @description Average first-token latency in milliseconds over covered requests. Null when none are covered. */
+            firstTokenAvgMs: null | number;
+            firstTokenCoverage: components["schemas"]["FirstTokenCoverageResponse"];
+            /** @description Total LLM elapsed time in milliseconds. Null when unknown. */
+            llmMs: null | number;
+            /** @description Session average output tok/s: sum(output tokens) / sum(llm seconds) over covered requests. Null when no request carries both facts. */
+            outputTokensPerSecond: null | number;
+            /** @description Count of user exchanges. Null when no round facts were captured. */
+            rounds: null | number;
+            sessionId: string;
+            /** @description Count of model requests/steps. Null when the session has no usage or conversation facts. */
+            steps: null | number;
+            /** @description Total tool-call elapsed time in milliseconds. Null when unknown. */
+            toolMs: null | number;
+            totals: components["schemas"]["UsageTotalsResponse"];
         };
         SessionUsageResponse: {
             harnesses: components["schemas"]["UsageHarnessResponse"][];
@@ -13137,6 +13185,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionUsageResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionRuntimeStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionRuntimeStatsResponse"];
                 };
             };
             /** @description Not Found */

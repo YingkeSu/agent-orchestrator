@@ -1401,6 +1401,37 @@ type SessionUsageResponse struct {
 	Harnesses  []UsageHarnessResponse `json:"harnesses"`
 }
 
+// FirstTokenCoverageResponse reports how many requests contributed to the
+// session first-token average, the ADR Decision 3 coverage figure ("12 of 15
+// requests"). Total is the session's request count in the mode's semantics:
+// usage events for native sessions, prompt-bearing turns for chat sessions.
+type FirstTokenCoverageResponse struct {
+	Covered int64 `json:"covered" minimum:"0" description:"Requests whose first-token latency was captured."`
+	Total   int64 `json:"total" minimum:"0" description:"Requests that could have carried a first-token latency."`
+}
+
+// SessionRuntimeStatsResponse is the per-session runtime statistics bar (timing
+// ADR #9): rounds, steps, LLM/tool elapsed time, first-token average, output
+// tok/s, cache-hit rate, and token/cost totals. rounds/steps/llmMs/toolMs/
+// firstTokenAvgMs/outputTokensPerSecond are derived at read time from the
+// session mode's own durable facts and are null when the session has no
+// certifiable timing facts (pre-deployment history, a non-certified harness,
+// or an uncaptured anchor) — clients render the unknown marker, never a zero.
+// totals and cacheHitRate come from usage events and are present whenever token
+// facts exist.
+type SessionRuntimeStatsResponse struct {
+	SessionID             domain.SessionID           `json:"sessionId"`
+	Rounds                *int64                     `json:"rounds" minimum:"1" description:"Count of user exchanges. Null when no round facts were captured."`
+	Steps                 *int64                     `json:"steps" minimum:"1" description:"Count of model requests/steps. Null when the session has no usage or conversation facts."`
+	LLMMS                 *int64                     `json:"llmMs" minimum:"0" description:"Total LLM elapsed time in milliseconds. Null when unknown."`
+	ToolMS                *int64                     `json:"toolMs" minimum:"0" description:"Total tool-call elapsed time in milliseconds. Null when unknown."`
+	FirstTokenAvgMS       *int64                     `json:"firstTokenAvgMs" minimum:"0" description:"Average first-token latency in milliseconds over covered requests. Null when none are covered."`
+	FirstTokenCoverage    FirstTokenCoverageResponse `json:"firstTokenCoverage"`
+	OutputTokensPerSecond *float64                   `json:"outputTokensPerSecond" minimum:"0" description:"Session average output tok/s: sum(output tokens) / sum(llm seconds) over covered requests. Null when no request carries both facts."`
+	CacheHitRate          *float64                   `json:"cacheHitRate" description:"Cached input / (cached + uncached input). Null when either component is unknown."`
+	Totals                UsageTotalsResponse        `json:"totals"`
+}
+
 // UsageSummaryQuery is the query string accepted by GET /api/v1/usage/summary.
 // from/to bound the created_at range (inclusive, RFC 3339); omitting either
 // leaves that side unbounded. source/model are exact-match filters over the

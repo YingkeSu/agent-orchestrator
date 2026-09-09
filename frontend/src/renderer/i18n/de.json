@@ -1866,6 +1866,20 @@
 	"usage.log.source.claude_subagent": "Claude Subagent",
 	"usage.log.source.codex_rollout": "Codex Rollout",
 	"usage.log.source.kimi_wire": "Kimi Wire",
-"usage.trendTitle": "Nutzungstrend",
-	"usage.trendCost": "Kosten"
+	"usage.trendTitle": "Nutzungstrend",
+	"usage.trendCost": "Kosten",
+	"inspector.runtime.title": "Verbrauch & Laufzeit",
+	"inspector.runtime.loading": "Laufzeitstatistiken werden geladen…",
+	"inspector.runtime.loadFailed": "Laufzeitstatistiken konnten nicht geladen werden.",
+	"inspector.runtime.rounds_one": "{{count}} Runde",
+	"inspector.runtime.rounds_other": "{{count}} Runden",
+	"inspector.runtime.steps_one": "{{count}} Schritt",
+	"inspector.runtime.steps_other": "{{count}} Schritte",
+	"inspector.runtime.llmTime": "LLM {{duration}}",
+	"inspector.runtime.toolTime": "Werkzeugaufrufe {{duration}}",
+	"inspector.runtime.firstTokenAvg": "erstes Token ø {{duration}}",
+	"inspector.runtime.firstTokenCoverage": "{{covered}} von {{total}} Anfragen",
+	"inspector.runtime.tokensPerSecond": "{{count}} tok/s",
+	"inspector.runtime.cacheHitRate": "Cache-Treffer {{percent}}",
+	"inspector.runtime.totalTokens": "gesamt {{count}} tok"
 }

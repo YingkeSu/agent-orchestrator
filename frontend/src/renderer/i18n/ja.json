@@ -1866,6 +1866,20 @@
 	"usage.log.source.claude_subagent": "Claude サブエージェント",
 	"usage.log.source.codex_rollout": "Codex ロールアウト",
 	"usage.log.source.kimi_wire": "Kimi ワイヤー",
-"usage.trendTitle": "利用トレンド",
-	"usage.trendCost": "コスト"
+	"usage.trendTitle": "利用トレンド",
+	"usage.trendCost": "コスト",
+	"inspector.runtime.title": "使用量とランタイム",
+	"inspector.runtime.loading": "ランタイム統計を読み込み中…",
+	"inspector.runtime.loadFailed": "ランタイム統計を読み込めませんでした。",
+	"inspector.runtime.rounds_one": "{{count}} ラウンド",
+	"inspector.runtime.rounds_other": "{{count}} ラウンド",
+	"inspector.runtime.steps_one": "{{count}} ステップ",
+	"inspector.runtime.steps_other": "{{count}} ステップ",
+	"inspector.runtime.llmTime": "LLM {{duration}}",
+	"inspector.runtime.toolTime": "ツール呼び出し {{duration}}",
+	"inspector.runtime.firstTokenAvg": "初回トークン平均 {{duration}}",
+	"inspector.runtime.firstTokenCoverage": "{{total}} リクエスト中 {{covered}} 件",
+	"inspector.runtime.tokensPerSecond": "{{count}} tok/s",
+	"inspector.runtime.cacheHitRate": "キャッシュヒット {{percent}}",
+	"inspector.runtime.totalTokens": "合計 {{count}} tok"
 }

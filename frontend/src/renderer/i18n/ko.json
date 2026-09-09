@@ -1866,6 +1866,20 @@
 	"usage.log.source.claude_subagent": "Claude 서브에이전트",
 	"usage.log.source.codex_rollout": "Codex 롤아웃",
 	"usage.log.source.kimi_wire": "Kimi 와이어",
-"usage.trendTitle": "사용 추세",
-	"usage.trendCost": "비용"
+	"usage.trendTitle": "사용 추세",
+	"usage.trendCost": "비용",
+	"inspector.runtime.title": "사용량과 런타임",
+	"inspector.runtime.loading": "런타임 통계를 불러오는 중…",
+	"inspector.runtime.loadFailed": "런타임 통계를 불러올 수 없습니다.",
+	"inspector.runtime.rounds_one": "{{count}} 라운드",
+	"inspector.runtime.rounds_other": "{{count}} 라운드",
+	"inspector.runtime.steps_one": "{{count}} 단계",
+	"inspector.runtime.steps_other": "{{count}} 단계",
+	"inspector.runtime.llmTime": "LLM {{duration}}",
+	"inspector.runtime.toolTime": "도구 호출 {{duration}}",
+	"inspector.runtime.firstTokenAvg": "첫 토큰 평균 {{duration}}",
+	"inspector.runtime.firstTokenCoverage": "요청 {{total}}건 중 {{covered}}건",
+	"inspector.runtime.tokensPerSecond": "{{count}} tok/s",
+	"inspector.runtime.cacheHitRate": "캐시 적중 {{percent}}",
+	"inspector.runtime.totalTokens": "총 {{count}} tok"
 }
