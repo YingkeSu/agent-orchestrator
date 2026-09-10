@@ -39,6 +39,7 @@ const SOURCE_LABEL_KEY: Record<string, MessageKey> = {
 	claude_subagent: "usage.sourceKind.claudeSubagent",
 	codex_rollout: "usage.sourceKind.codexRollout",
 	kimi_wire: "usage.sourceKind.kimiWire",
+	acp_usage: "usage.sourceKind.acpUsage",
 };
 
 const SOURCE_PROVIDER: Record<string, string> = {

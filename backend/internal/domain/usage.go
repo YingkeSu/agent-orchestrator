@@ -16,6 +16,11 @@ const (
 	UsageSourceClaudeSubagent UsageSourceKind = "claude_subagent"
 	UsageSourceCodexRollout   UsageSourceKind = "codex_rollout"
 	UsageSourceKimiWire       UsageSourceKind = "kimi_wire"
+	// UsageSourceACPUsage certifies usage delivered through AO's own chat
+	// provider layer rather than a provider-owned transcript. Its durable
+	// artifact is the conversation_provider_events archive, which — unlike
+	// rotated transcripts — is AO state, so the source cursor re-scans it.
+	UsageSourceACPUsage UsageSourceKind = "acp_usage"
 )
 
 // UsageBindingState tracks the root native-session binding lifecycle.
@@ -79,6 +84,25 @@ type UsageBindingRecord struct {
 	UpdatedAt      time.Time
 }
 
+// ACPUsageConversationRef is one conversation whose durable provider-event
+// archive carries usage facts, paired with the owning AO session and the
+// newest archived usage row id.
+type ACPUsageConversationRef struct {
+	ConversationID string
+	SessionID      SessionID
+	LastEventID    int64
+}
+
+// ACPUsageEvent is one archived chat provider usage row. The row id is the
+// replay identity: it keys the emitted usage event's SourceEventKey so a
+// re-scan of the durable archive deduplicates instead of duplicating.
+type ACPUsageEvent struct {
+	ID          int64
+	SessionID   SessionID
+	PayloadJSON string
+	ReceivedAt  time.Time
+}
+
 // UsageSourceRecord tracks one physical JSONL artifact generation and its
 // durable read cursor.
 type UsageSourceRecord struct {
@@ -119,6 +143,10 @@ type UsageProviderID string
 const (
 	UsageProviderOpenAI    UsageProviderID = "openai"
 	UsageProviderAnthropic UsageProviderID = "anthropic"
+	// UsageProviderACP is the provider-neutral vocabulary chat drivers
+	// normalize into: per-turn token counts whose cache bucket folds cache
+	// reads and writes into one counter, with input tokens disjoint from it.
+	UsageProviderACP UsageProviderID = "acp"
 )
 
 // UsageMeasurementKind describes the trust source for a complete usage event.

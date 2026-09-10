@@ -86,11 +86,14 @@ WHERE binding_id = ?
 ORDER BY generation, id;
 
 -- name: ListWatchableUsageSources :many
+-- acp_usage sources are table-backed, not transcript files: the file watcher
+-- would only fail to open their artifact path. The ACP certifier owns them.
 SELECT us.*
 FROM usage_sources us
 JOIN usage_bindings ub ON ub.id = us.binding_id
 JOIN sessions s ON s.id = ub.session_id
-WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
+WHERE us.kind <> 'acp_usage'
+  AND (s.is_terminated = 0 OR ub.state = 'finalizing')
   AND NOT (
       us.state = 'complete'
       AND us.last_error_code = 'artifact_replaced'
@@ -1100,3 +1103,41 @@ JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
 WHERE conversation_activities.conversation_id IN (SELECT conversations.id FROM conversations WHERE conversations.session_id = sqlc.arg(session_id))
   AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
 ORDER BY created_at;
+
+-- name: ListACPUsageEventConversations :many
+-- Conversations whose durable provider-event archive carries usage facts, with
+-- the newest usage row id. The ACP certifier compares last_event_id against
+-- each conversation's acp_usage source cursor to find work; the scan is the
+-- backfill entry point as well as the live poll, because the archive is
+-- durable AO state rather than a rotated transcript.
+SELECT
+    cpe.conversation_id,
+    cpe.session_id,
+    CAST(MAX(cpe.id) AS INTEGER) AS last_event_id
+FROM conversation_provider_events cpe
+WHERE cpe.method = 'usage'
+GROUP BY cpe.conversation_id, cpe.session_id
+ORDER BY cpe.conversation_id;
+
+-- name: ListACPUsageEventsAfter :many
+-- One bounded, id-ordered page of the conversation's archived usage events
+-- past the certifier cursor. The row id is the replay identity: it keys the
+-- emitted model_usage_events.source_event_key, so a re-scan deduplicates
+-- through the events table's UNIQUE(binding_id, source_event_key).
+SELECT
+    id,
+    session_id,
+    payload_json,
+    received_at
+FROM conversation_provider_events
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND method = 'usage'
+  AND id > sqlc.arg(after_id)
+ORDER BY id
+LIMIT sqlc.arg(limit);
+
+-- name: SelectConversationUsageModel :one
+-- The conversation's durable model choice (conversations.model; NULL when the
+-- user never picked one and the provider default answered). The ACP usage
+-- payload names no model, so this row is the attribution evidence.
+SELECT model FROM conversations WHERE id = ?;

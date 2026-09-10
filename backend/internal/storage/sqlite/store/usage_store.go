@@ -407,7 +407,7 @@ func (s *Store) ApplyUsageChunk(
 		for _, ev := range events {
 			ev.ModelID = strings.TrimSpace(ev.ModelID)
 			ev.BillingProviderID = strings.TrimSpace(ev.BillingProviderID)
-			if err := validateUsageEvent(source.Harness, ev); err != nil {
+			if err := validateUsageEvent(source.Kind, source.Harness, ev); err != nil {
 				return err
 			}
 			existing, err := q.GetModelUsageEventByKey(ctx, gen.GetModelUsageEventByKeyParams{
@@ -1201,6 +1201,61 @@ func (s *Store) HasOpenUsageAttribution(ctx context.Context, sourceID int64) (bo
 	return open != 0, nil
 }
 
+// ListACPUsageEventConversations returns every conversation whose durable
+// provider-event archive carries usage facts, with the newest usage row id.
+func (s *Store) ListACPUsageEventConversations(ctx context.Context) ([]domain.ACPUsageConversationRef, error) {
+	rows, err := s.qr.ListACPUsageEventConversations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list ACP usage event conversations: %w", err)
+	}
+	out := make([]domain.ACPUsageConversationRef, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.ACPUsageConversationRef{
+			ConversationID: row.ConversationID,
+			SessionID:      row.SessionID,
+			LastEventID:    row.LastEventID,
+		})
+	}
+	return out, nil
+}
+
+// ListACPUsageEventsAfter returns one bounded, id-ordered page of the
+// conversation's archived usage events past the given row id.
+func (s *Store) ListACPUsageEventsAfter(ctx context.Context, conversationID string, afterID, limit int64) ([]domain.ACPUsageEvent, error) {
+	rows, err := s.qr.ListACPUsageEventsAfter(ctx, gen.ListACPUsageEventsAfterParams{
+		ConversationID: conversationID,
+		AfterID:        afterID,
+		Limit:          limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list ACP usage events for conversation %s after %d: %w", conversationID, afterID, err)
+	}
+	out := make([]domain.ACPUsageEvent, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.ACPUsageEvent{
+			ID:          row.ID,
+			SessionID:   row.SessionID,
+			PayloadJSON: row.PayloadJson,
+			ReceivedAt:  row.ReceivedAt,
+		})
+	}
+	return out, nil
+}
+
+// ConversationUsageModel returns the conversation's durable model choice. An
+// unset choice reads as the empty string: the provider default answered, and
+// nothing durable names which model that was.
+func (s *Store) ConversationUsageModel(ctx context.Context, conversationID string) (string, bool, error) {
+	model, err := s.qr.SelectConversationUsageModel(ctx, conversationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("select usage model for conversation %s: %w", conversationID, err)
+	}
+	return model.String, true, nil
+}
+
 func usageEventReplayDisposition(existing gen.GetModelUsageEventByKeyRow, event domain.ModelUsageEvent) (matches, promoteAttribution bool) {
 	genericMatches := existing.ProviderID == string(event.ProviderID) && existing.ModelID == event.ModelID &&
 		existing.UsageMeasurementKind == string(event.MeasurementKind) &&
@@ -1260,9 +1315,16 @@ func usageAggregateFromGen(row gen.AggregateUsageBySessionHarnessModelRow) domai
 	}
 }
 
-func validateUsageEvent(harness domain.AgentHarness, event domain.ModelUsageEvent) error {
+func validateUsageEvent(sourceKind domain.UsageSourceKind, harness domain.AgentHarness, event domain.ModelUsageEvent) error {
+	// The provider id names the vocabulary the counters were normalized into,
+	// which the source kind fixes: transcript sources speak their harness's
+	// provider vocabulary, while ACP sources speak the provider-neutral chat
+	// vocabulary regardless of which harness drove the session.
 	expectedProvider := domain.UsageProviderAnthropic
-	if harness == domain.HarnessCodex {
+	switch {
+	case sourceKind == domain.UsageSourceACPUsage:
+		expectedProvider = domain.UsageProviderACP
+	case harness == domain.HarnessCodex:
 		expectedProvider = domain.UsageProviderOpenAI
 	}
 	if event.ProviderID != expectedProvider || event.ModelID == "" || event.SourceEventKey == "" {
