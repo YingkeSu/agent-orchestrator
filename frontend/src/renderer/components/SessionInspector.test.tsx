@@ -944,8 +944,44 @@ describe("SessionInspector usage", () => {
 		});
 
 		renderWithQuery(<SessionInspector session={session([])} />);
-		// The hook retries once before surfacing the error.
-		expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent("Could not load runtime stats.");
+		// The hook retries once before surfacing the error. With this mock the
+		// usage read fails too, so the section composes both inline alerts.
+		const alerts = await screen.findAllByRole("alert", {}, { timeout: 5000 });
+		expect(alerts.map((alert) => alert.textContent)).toContain("Could not load runtime stats.");
+	});
+
+	// The usage and runtime reads are independent: a stats blip renders its
+	// own inline failure while the token/cost telemetry stays on screen.
+	it("keeps token/cost telemetry visible when only the runtime stats fetch fails", async () => {
+		const commonGets = commonGetsResponder();
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/usage/sessions/{sessionId}/stats") {
+				return { data: undefined, error: { message: "boom" } };
+			}
+			if (path === "/api/v1/usage/sessions/{sessionId}") {
+				return {
+					data: {
+						sessionId: "sess-1",
+						incomplete: false,
+						totals: tokenTotals(null),
+						harnesses: [],
+					},
+					error: undefined,
+				};
+			}
+			return commonGets(path);
+		});
+
+		renderWithQuery(<SessionInspector session={session([])} />);
+
+		const section = (await screen.findByText("Usage & runtime")).closest(
+			"[data-testid='inspector-section']",
+		) as HTMLElement;
+		expect(await within(section).findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent(
+			"Could not load runtime stats.",
+		);
+		expect(within(section).getByLabelText("1,500 tokens processed")).toBeInTheDocument();
+		expect(within(section).queryByTestId("session-runtime-stats")).not.toBeInTheDocument();
 	});
 
 	it("keeps the runtime section absent for an empty session", async () => {

@@ -1869,7 +1869,6 @@
 	"usage.trendTitle": "利用トレンド",
 	"usage.trendCost": "コスト",
 	"inspector.runtime.title": "使用量とランタイム",
-	"inspector.runtime.loading": "ランタイム統計を読み込み中…",
 	"inspector.runtime.loadFailed": "ランタイム統計を読み込めませんでした。",
 	"inspector.runtime.rounds_one": "{{count}} ラウンド",
 	"inspector.runtime.rounds_other": "{{count}} ラウンド",

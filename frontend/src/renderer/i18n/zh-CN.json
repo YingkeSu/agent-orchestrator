@@ -1851,7 +1851,6 @@
 	"usage.trendTitle": "用量趋势",
 	"usage.trendCost": "成本",
 	"inspector.runtime.title": "用量与运行时",
-	"inspector.runtime.loading": "正在加载运行时统计…",
 	"inspector.runtime.loadFailed": "无法加载运行时统计。",
 	"inspector.runtime.rounds_one": "{{count}} 轮",
 	"inspector.runtime.rounds_other": "{{count}} 轮",

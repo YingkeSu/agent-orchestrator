@@ -1869,7 +1869,6 @@
 	"usage.trendTitle": "사용 추세",
 	"usage.trendCost": "비용",
 	"inspector.runtime.title": "사용량과 런타임",
-	"inspector.runtime.loading": "런타임 통계를 불러오는 중…",
 	"inspector.runtime.loadFailed": "런타임 통계를 불러올 수 없습니다.",
 	"inspector.runtime.rounds_one": "{{count}} 라운드",
 	"inspector.runtime.rounds_other": "{{count}} 라운드",

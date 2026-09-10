@@ -1889,7 +1889,6 @@
 	"usage.trendTitle": "Usage trend",
 	"usage.trendCost": "Cost",
 	"inspector.runtime.title": "Usage & runtime",
-	"inspector.runtime.loading": "Loading runtime stats…",
 	"inspector.runtime.loadFailed": "Could not load runtime stats.",
 	"inspector.runtime.rounds_one": "{{count}} round",
 	"inspector.runtime.rounds_other": "{{count}} rounds",

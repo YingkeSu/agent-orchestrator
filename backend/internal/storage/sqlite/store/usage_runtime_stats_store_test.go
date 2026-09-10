@@ -286,6 +286,156 @@ func TestListConversationRuntimeTurnFactsNoConversation(t *testing.T) {
 	}
 }
 
+// TestListConversationRuntimeTurnFactsDropEditForkAncestor covers the per-turn
+// lineage filter: after an edit fork, an ancestor-branch turn whose items all
+// fall beyond the child branch's cutoff is dropped, so its replacement turn is
+// not counted twice and chat LLM time cannot double-count the same exchange.
+func TestListConversationRuntimeTurnFactsDropEditForkAncestor(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "stats-fork")
+	rec := sampleRecord("stats-fork")
+	rec.Mode = domain.SessionModeChat
+	session, err := s.CreateSession(ctx, rec)
+	mustNoError(t, err, "create chat session")
+	conversation, err := s.CreateConversation(ctx, "stats-fork-conv", domain.ConversationScopeSession, "stats-fork", session.ID, runtimeClock)
+	mustNoError(t, err, "create conversation")
+	mustNoError(t, s.ClaimChatControllerGeneration(ctx, session.ID, "gen-1", runtimeClock))
+
+	// Turn 1 sits at or before the fork cutoff, so it stays in lineage: bound
+	// from +2s to +20m with no tool calls.
+	turn1At := runtimeClock.Add(time.Minute)
+	created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, "gen-1", domain.ConversationMessage{
+		ID: "user-1", Text: "first prompt", Origin: domain.MessageOriginHuman,
+	}, "turn-1", turn1At)
+	if err != nil || !created {
+		t.Fatalf("append user-1: created=%v err=%v", created, err)
+	}
+	mustNoError(t, s.BindTurnToProvider(ctx, "turn-1", "prov-1", turn1At.Add(2*time.Second)))
+	mustNoError(t, s.AppendAssistantDelta(ctx, conversation.ID, "item-1", "prov-1", "working", "assistant-1", turn1At.Add(6*time.Second)))
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "prov-1", domain.TurnStateCompleted, "", turn1At.Add(20*time.Minute)))
+
+	// Turn 2 is the ancestor the user edits away: its items land on sequence
+	// 3+, entirely beyond the cutoff the child branch will fork at.
+	turn2At := turn1At.Add(30 * time.Minute)
+	created, err = s.AppendUserMessage(ctx, conversation.ID, session.ID, "gen-1", domain.ConversationMessage{
+		ID: "user-2", Text: "draft answer", Origin: domain.MessageOriginHuman,
+	}, "turn-2", turn2At)
+	if err != nil || !created {
+		t.Fatalf("append user-2: created=%v err=%v", created, err)
+	}
+	mustNoError(t, s.BindTurnToProvider(ctx, "turn-2", "prov-2", turn2At.Add(time.Second)))
+	mustNoError(t, s.AppendAssistantDelta(ctx, conversation.ID, "item-2", "prov-2", "draft", "assistant-2", turn2At.Add(2*time.Second)))
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "prov-2", domain.TurnStateCompleted, "", turn2At.Add(10*time.Minute)))
+
+	forkAt := turn2At.Add(15 * time.Minute)
+	mustNoError(t, s.CreateConversationBranch(ctx, domain.ConversationBranch{
+		ID:                     conversation.ID + ":edit-1",
+		ConversationID:         conversation.ID,
+		SessionID:              session.ID,
+		ParentBranchID:         conversation.ID + ":root",
+		ForkAfterSequence:      2,
+		ProviderConversationID: "thread-edit-1",
+		ProviderScopeID:        conversation.ID + ":edit-1",
+	}, forkAt))
+	mustNoError(t, s.ActivateConversationBranch(ctx, session.ID, conversation.ID, conversation.ID+":edit-1", "thread-edit-1", "gen-2", forkAt))
+	mustNoError(t, s.ClaimChatControllerGeneration(ctx, session.ID, "gen-2", forkAt))
+
+	// The replacement turn asks the edited prompt on the child branch: bound
+	// from +1s to +8m.
+	turn3At := turn2At.Add(20 * time.Minute)
+	created, err = s.AppendUserMessage(ctx, conversation.ID, session.ID, "gen-2", domain.ConversationMessage{
+		ID: "user-3", Text: "edited answer", Origin: domain.MessageOriginHuman,
+	}, "turn-3", turn3At)
+	if err != nil || !created {
+		t.Fatalf("append user-3: created=%v err=%v", created, err)
+	}
+	mustNoError(t, s.BindTurnToProvider(ctx, "turn-3", "prov-3", turn3At.Add(time.Second)))
+	mustNoError(t, s.AppendAssistantDelta(ctx, conversation.ID, "item-3", "prov-3", "final", "assistant-3", turn3At.Add(3*time.Second)))
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "prov-3", domain.TurnStateCompleted, "", turn3At.Add(8*time.Minute)))
+
+	facts, err := s.ListConversationRuntimeTurnFacts(ctx, session.ID)
+	mustNoError(t, err)
+	ids := make([]string, 0, len(facts))
+	var llmMS int64
+	for _, fact := range facts {
+		ids = append(ids, fact.TurnID)
+		if fact.State.Terminal() && fact.StartedAt != nil && fact.CompletedAt != nil {
+			llmMS += fact.CompletedAt.Sub(*fact.StartedAt).Milliseconds() - fact.ToolMS
+		}
+	}
+	if len(facts) != 2 {
+		t.Fatalf("turn facts = %v, want [turn-1 turn-3] (edit-fork ancestor dropped)", ids)
+	}
+	// 20m - 2s from turn 1 plus 8m - 1s from turn 3. Counting the ancestor's
+	// 10m would yield 38m - 3s.
+	if want := int64((20*time.Minute - 2*time.Second + 8*time.Minute - time.Second) / time.Millisecond); llmMS != want {
+		t.Fatalf("chat llm total = %d ms, want %d (ancestor not double-counted)", llmMS, want)
+	}
+}
+
+// TestListConversationRuntimeTurnFactsSettleFallbackKeepsFirstTokenUnknown
+// covers the reconnect-window fallback: an assistant row inserted whole by
+// SettleAssistantMessage carries created_at = settle time, so its turn's
+// first-token stays unknown (nil) instead of reporting the inflated
+// request-to-settlement interval. A streamed turn keeps its certified anchor.
+func TestListConversationRuntimeTurnFactsSettleFallbackKeepsFirstTokenUnknown(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "stats-reconnect")
+	rec := sampleRecord("stats-reconnect")
+	rec.Mode = domain.SessionModeChat
+	session, err := s.CreateSession(ctx, rec)
+	mustNoError(t, err, "create chat session")
+	conversation, err := s.CreateConversation(ctx, "stats-reconnect-conv", domain.ConversationScopeSession, "stats-reconnect", session.ID, runtimeClock)
+	mustNoError(t, err, "create conversation")
+	mustNoError(t, s.ClaimChatControllerGeneration(ctx, session.ID, "gen-1", runtimeClock))
+
+	// Turn 1 completed inside a reconnect window: the provider settled the
+	// whole message 45 seconds after the request without AO ever seeing a
+	// streaming delta.
+	turn1At := runtimeClock.Add(time.Minute)
+	created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, "gen-1", domain.ConversationMessage{
+		ID: "user-1", Text: "catch up", Origin: domain.MessageOriginHuman,
+	}, "turn-1", turn1At)
+	if err != nil || !created {
+		t.Fatalf("append user-1: created=%v err=%v", created, err)
+	}
+	mustNoError(t, s.BindTurnToProvider(ctx, "turn-1", "prov-1", turn1At.Add(time.Second)))
+	mustNoError(t, s.SettleAssistantMessage(ctx, conversation.ID, "item-1", "prov-1", "whole answer", "assistant-1", turn1At.Add(45*time.Second)))
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "prov-1", domain.TurnStateCompleted, "", turn1At.Add(time.Minute)))
+
+	// Turn 2 streams normally: the first delta certifies the anchor.
+	turn2At := turn1At.Add(10 * time.Minute)
+	created, err = s.AppendUserMessage(ctx, conversation.ID, session.ID, "gen-1", domain.ConversationMessage{
+		ID: "user-2", Text: "and then", Origin: domain.MessageOriginHuman,
+	}, "turn-2", turn2At)
+	if err != nil || !created {
+		t.Fatalf("append user-2: created=%v err=%v", created, err)
+	}
+	mustNoError(t, s.BindTurnToProvider(ctx, "turn-2", "prov-2", turn2At))
+	mustNoError(t, s.AppendAssistantDelta(ctx, conversation.ID, "item-2", "prov-2", "here", "assistant-2", turn2At.Add(3*time.Second)))
+
+	facts, err := s.ListConversationRuntimeTurnFacts(ctx, session.ID)
+	mustNoError(t, err)
+	byID := make(map[string]domain.ConversationRuntimeTurnFact, len(facts))
+	for _, fact := range facts {
+		byID[fact.TurnID] = fact
+	}
+
+	fallback := byID["turn-1"]
+	if !fallback.PromptBearing || fallback.AssistantCount != 1 {
+		t.Fatalf("fallback turn = %+v, want prompt-bearing with 1 assistant step", fallback)
+	}
+	if fallback.FirstTokenDeltaMS != nil {
+		t.Fatalf("fallback turn first token = %d ms, want nil (never the inflated settle interval)", *fallback.FirstTokenDeltaMS)
+	}
+	streamed := byID["turn-2"]
+	if streamed.FirstTokenDeltaMS == nil || *streamed.FirstTokenDeltaMS != 3_000 {
+		t.Fatalf("streamed turn first token = %+v, want 3000 (certified anchor intact)", streamed.FirstTokenDeltaMS)
+	}
+}
+
 func int64Ptr(value int64) *int64 {
 	return &value
 }
