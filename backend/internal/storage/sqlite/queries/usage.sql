@@ -974,8 +974,12 @@ WHERE ub.session_id = ?;
 -- name: ListConversationRuntimeTurnFacts :many
 -- Chat-mode runtime statistics (timing ADR #9): one row per conversation turn
 -- on the session's active branch lineage. Turns are restricted to the session's
--- own conversation and to the active lineage the timeline shows (rolled-back,
--- promoted, and cancelled turns are discarded); daemon-only turns (compaction,
+-- own conversation and to the active lineage the timeline shows: like
+-- SelectConversationTurns, a turn only counts when it carries in-lineage
+-- content at or before its branch's fork cutoff, so an edit-fork ancestor turn
+-- whose items all fall beyond the cutoff (its replacement lives on the child
+-- branch) is dropped instead of double-counting chat LLM time. Rolled-back,
+-- promoted, and cancelled turns are discarded; daemon-only turns (compaction,
 -- provider-adopted resumes) carry no prompt. The store pairs these rows with
 -- ListConversationRuntimeContentRows to derive the per-turn facts.
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
@@ -1005,6 +1009,15 @@ WHERE turn.conversation_id IN (SELECT conversations.id FROM conversations WHERE 
   AND turn.promoted_to_turn_id IS NULL
   AND turn.rolled_back_at IS NULL
   AND turn.state <> 'cancelled'
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = turn.id
+        AND lineage_message.sequence <= path.max_sequence
+      UNION ALL
+      SELECT 1 FROM conversation_activities AS lineage_activity
+      WHERE lineage_activity.turn_id = turn.id
+        AND lineage_activity.sequence <= path.max_sequence
+  ))
 ORDER BY turn.requested_at, turn.rowid;
 
 -- name: ListConversationRuntimeContentRows :many
@@ -1014,6 +1027,10 @@ ORDER BY turn.requested_at, turn.rowid;
 -- tool elapsed, and step counts with full timestamp precision (the driver's
 -- stored text format is not parseable by SQLite date functions). Rows with a
 -- NULL turn_id are dropped by the caller: only turn-attributed work counts.
+-- Messages also carry revision and streaming so the caller can tell a row
+-- inserted whole by the settle fallback (revision 0, not streaming) from one
+-- that entered the streaming pipeline; activities always report 0 because
+-- their created_at certifies first content unconditionally.
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
     FROM conversations
@@ -1035,6 +1052,8 @@ SELECT
     CAST(conversation_messages.role AS TEXT) AS role,
     CAST(conversation_messages.origin AS TEXT) AS origin,
     '' AS status,
+    conversation_messages.revision AS revision,
+    conversation_messages.streaming AS streaming,
     conversation_messages.created_at AS created_at,
     conversation_messages.updated_at AS updated_at
 FROM conversation_messages
@@ -1048,6 +1067,8 @@ SELECT
     '' AS role,
     '' AS origin,
     CAST(conversation_activities.status AS TEXT) AS status,
+    0 AS revision,
+    0 AS streaming,
     conversation_activities.created_at AS created_at,
     conversation_activities.updated_at AS updated_at
 FROM conversation_activities

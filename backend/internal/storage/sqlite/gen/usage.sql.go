@@ -1394,6 +1394,8 @@ SELECT
     CAST(conversation_messages.role AS TEXT) AS role,
     CAST(conversation_messages.origin AS TEXT) AS origin,
     '' AS status,
+    conversation_messages.revision AS revision,
+    conversation_messages.streaming AS streaming,
     conversation_messages.created_at AS created_at,
     conversation_messages.updated_at AS updated_at
 FROM conversation_messages
@@ -1407,6 +1409,8 @@ SELECT
     '' AS role,
     '' AS origin,
     CAST(conversation_activities.status AS TEXT) AS status,
+    0 AS revision,
+    0 AS streaming,
     conversation_activities.created_at AS created_at,
     conversation_activities.updated_at AS updated_at
 FROM conversation_activities
@@ -1422,6 +1426,8 @@ type ListConversationRuntimeContentRowsRow struct {
 	Role      string
 	Origin    string
 	Status    string
+	Revision  int64
+	Streaming int64
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -1432,6 +1438,10 @@ type ListConversationRuntimeContentRowsRow struct {
 // tool elapsed, and step counts with full timestamp precision (the driver's
 // stored text format is not parseable by SQLite date functions). Rows with a
 // NULL turn_id are dropped by the caller: only turn-attributed work counts.
+// Messages also carry revision and streaming so the caller can tell a row
+// inserted whole by the settle fallback (revision 0, not streaming) from one
+// that entered the streaming pipeline; activities always report 0 because
+// their created_at certifies first content unconditionally.
 func (q *Queries) ListConversationRuntimeContentRows(ctx context.Context, sessionID *domain.SessionID) ([]ListConversationRuntimeContentRowsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listConversationRuntimeContentRows, sessionID)
 	if err != nil {
@@ -1447,6 +1457,8 @@ func (q *Queries) ListConversationRuntimeContentRows(ctx context.Context, sessio
 			&i.Role,
 			&i.Origin,
 			&i.Status,
+			&i.Revision,
+			&i.Streaming,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -1491,6 +1503,15 @@ WHERE turn.conversation_id IN (SELECT conversations.id FROM conversations WHERE 
   AND turn.promoted_to_turn_id IS NULL
   AND turn.rolled_back_at IS NULL
   AND turn.state <> 'cancelled'
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = turn.id
+        AND lineage_message.sequence <= path.max_sequence
+      UNION ALL
+      SELECT 1 FROM conversation_activities AS lineage_activity
+      WHERE lineage_activity.turn_id = turn.id
+        AND lineage_activity.sequence <= path.max_sequence
+  ))
 ORDER BY turn.requested_at, turn.rowid
 `
 
@@ -1504,8 +1525,12 @@ type ListConversationRuntimeTurnFactsRow struct {
 
 // Chat-mode runtime statistics (timing ADR #9): one row per conversation turn
 // on the session's active branch lineage. Turns are restricted to the session's
-// own conversation and to the active lineage the timeline shows (rolled-back,
-// promoted, and cancelled turns are discarded); daemon-only turns (compaction,
+// own conversation and to the active lineage the timeline shows: like
+// SelectConversationTurns, a turn only counts when it carries in-lineage
+// content at or before its branch's fork cutoff, so an edit-fork ancestor turn
+// whose items all fall beyond the cutoff (its replacement lives on the child
+// branch) is dropped instead of double-counting chat LLM time. Rolled-back,
+// promoted, and cancelled turns are discarded; daemon-only turns (compaction,
 // provider-adopted resumes) carry no prompt. The store pairs these rows with
 // ListConversationRuntimeContentRows to derive the per-turn facts.
 func (q *Queries) ListConversationRuntimeTurnFacts(ctx context.Context, sessionID *domain.SessionID) ([]ListConversationRuntimeTurnFactsRow, error) {

@@ -1893,7 +1893,6 @@
 	"usage.trendTitle": "Tendência de uso",
 	"usage.trendCost": "Custo",
 	"inspector.runtime.title": "Uso e tempo de execução",
-	"inspector.runtime.loading": "Carregando estatísticas de execução…",
 	"inspector.runtime.loadFailed": "Não foi possível carregar as estatísticas de execução.",
 	"inspector.runtime.rounds_one": "{{count}} rodada",
 	"inspector.runtime.rounds_other": "{{count}} rodadas",

@@ -1869,7 +1869,6 @@
 	"usage.trendTitle": "Nutzungstrend",
 	"usage.trendCost": "Kosten",
 	"inspector.runtime.title": "Verbrauch & Laufzeit",
-	"inspector.runtime.loading": "Laufzeitstatistiken werden geladen…",
 	"inspector.runtime.loadFailed": "Laufzeitstatistiken konnten nicht geladen werden.",
 	"inspector.runtime.rounds_one": "{{count}} Runde",
 	"inspector.runtime.rounds_other": "{{count}} Runden",
