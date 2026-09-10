@@ -22,6 +22,7 @@ const fullStats: SessionRuntimeStats = {
 		cachedInputTokens: 2_910_000,
 		uncachedInputTokens: 90_000,
 		outputTokens: 3_300_000,
+		cacheCreationInputTokens: 45_000,
 		processedTokens: 6_300_000,
 		cacheReadTokens: 2_910_000,
 		estimatedCost: null,

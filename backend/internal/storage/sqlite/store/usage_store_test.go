@@ -2583,3 +2583,244 @@ WHERE source_event_key = 'provider-promotion'`).Scan(
 		t.Fatal("observed replacement remains open for attribution repair")
 	}
 }
+
+func TestApplyUsageChunkPersistsCacheCreationBucket(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	sess := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	now := time.Unix(1700000000, 0).UTC()
+	source := seedUsageSource(t, s, sess, now)
+
+	creation := int64(3)
+	withBucket := anthropicUsageEvent("bucket-3", 10, 3, 5, 4)
+	withBucket.Tokens.CacheCreationInputTokens = &creation
+	withBucket.BillingProviderID = "anthropic"
+	withBucket.BillingProviderSource = domain.UsageBillingProviderObserved
+	zero := int64(0)
+	knownZero := anthropicUsageEvent("bucket-0", 10, 0, 5, 4)
+	knownZero.Tokens.CacheCreationInputTokens = &zero
+	knownZero.BillingProviderID = "anthropic"
+	knownZero.BillingProviderSource = domain.UsageBillingProviderObserved
+	if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{withBucket, knownZero}, nil); err != nil {
+		t.Fatalf("apply chunk: %v", err)
+	}
+
+	rows, err := s.ListUsageRequestLog(ctx, nil, nil, "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("list request log: %v", err)
+	}
+	byInput := map[int64]*int64{}
+	for _, row := range rows {
+		byInput[usageTokenValue(row.InputTokens)] = row.CacheCreationInputTokens
+	}
+	if got := byInput[18]; got == nil || *got != 3 {
+		t.Fatalf("captured bucket = %v, want 3", got)
+	}
+	if got := byInput[15]; got == nil || *got != 0 {
+		t.Fatalf("reported zero = %v, want a known zero", got)
+	}
+
+	negative := int64(-1)
+	badEvent := anthropicUsageEvent("bucket-negative", 10, 3, 5, 4)
+	badEvent.Tokens.CacheCreationInputTokens = &negative
+	badEvent.BillingProviderID = "anthropic"
+	badEvent.BillingProviderSource = domain.UsageBillingProviderObserved
+	if err := s.ApplyUsageChunk(ctx, source.ID, 10, now, domain.SourceCursorState{
+		ByteOffset: 20, State: domain.UsageSourceActive, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{badEvent}, nil); err == nil {
+		t.Fatal("negative cache-creation bucket was persisted")
+	}
+	assertUsageSourceOffset(t, s, source.ID, 10)
+}
+
+// A pre-0131 row's NULL bucket fills from the replay without duplicating the
+// event; once captured, a different bucket replays as a conflict (ADR 0006
+// Decision 1: the bucket joins the replay comparison).
+func TestApplyUsageChunkReplayFillsThenGuardsCacheCreation(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	sess := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	now := time.Unix(1700000000, 0).UTC()
+	source := seedUsageSource(t, s, sess, now)
+
+	// Pre-capture row: the helper leaves the bucket nil, so the column is NULL.
+	event := anthropicUsageEvent("bucket-late", 10, 3, 5, 4)
+	event.BillingProviderID = "anthropic"
+	event.BillingProviderSource = domain.UsageBillingProviderObserved
+	if err := s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{event}, nil); err != nil {
+		t.Fatalf("seed pre-capture event: %v", err)
+	}
+
+	// Replay from a replacement generation carries the bucket: enrichment, not
+	// a conflict.
+	enriched := event
+	creation := int64(3)
+	enriched.Tokens.CacheCreationInputTokens = &creation
+	if err := s.ApplyUsageChunk(ctx, source.ID, 10, now, domain.SourceCursorState{
+		ByteOffset: 20, State: domain.UsageSourceActive, UpdatedAt: now.Add(time.Second),
+	}, []domain.ModelUsageEvent{enriched}, nil); err != nil {
+		t.Fatalf("enriching replay conflict: %v", err)
+	}
+	rows, err := s.ListUsageRequestLog(ctx, nil, nil, "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("list request log: %v", err)
+	}
+	if len(rows) != 1 || rows[0].CacheCreationInputTokens == nil || *rows[0].CacheCreationInputTokens != 3 {
+		t.Fatalf("rows = %+v, want one event with bucket 3", rows)
+	}
+
+	// Identical bucket stays a no-op.
+	if err := s.ApplyUsageChunk(ctx, source.ID, 20, now.Add(time.Second), domain.SourceCursorState{
+		ByteOffset: 30, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second),
+	}, []domain.ModelUsageEvent{enriched}, nil); err != nil {
+		t.Fatalf("identical replay conflict: %v", err)
+	}
+	changed := anthropicUsageEvent("bucket-late", 10, 3, 5, 4)
+	other := int64(9)
+	changed.Tokens.CacheCreationInputTokens = &other
+	if err := s.ApplyUsageChunk(ctx, source.ID, 30, now.Add(2*time.Second), domain.SourceCursorState{
+		ByteOffset: 40, State: domain.UsageSourceActive, UpdatedAt: now.Add(3 * time.Second),
+	}, []domain.ModelUsageEvent{changed}, nil); !errors.Is(err, domain.ErrUsageSourceEventConflict) {
+		t.Fatalf("changed bucket replay err = %v, want source conflict", err)
+	}
+	assertUsageSourceOffset(t, s, source.ID, 30)
+}
+
+func TestUsageAggregatesGateCacheCreationCoverage(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	partial := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	complete := seedUsageSession(t, s, domain.HarnessCodex)
+	now := time.Unix(1700000000, 0).UTC()
+	partialSource := seedUsageSource(t, s, partial, now)
+	completeSource := seedUsageSource(t, s, complete, now)
+
+	creation := int64(3)
+	known := anthropicUsageEvent("gate-known", 10, 3, 5, 4)
+	known.Tokens.CacheCreationInputTokens = &creation
+	known.BillingProviderID = "anthropic"
+	known.BillingProviderSource = domain.UsageBillingProviderObserved
+	unknown := anthropicUsageEvent("gate-unknown", 10, 0, 5, 4)
+	unknown.BillingProviderID = "anthropic"
+	unknown.BillingProviderSource = domain.UsageBillingProviderObserved
+	if err := s.ApplyUsageChunk(ctx, partialSource.ID, 0, partialSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{known, unknown}, nil); err != nil {
+		t.Fatalf("apply partial chunk: %v", err)
+	}
+
+	first, second, totalInput := int64(2), int64(4), int64(8)
+	codexKnown := usageEvent("gate-codex-1", domain.UsageTokenMetrics{
+		InputTokens: &totalInput, CachedInputTokens: &second, UncachedInputTokens: &second, OutputTokens: &first,
+		CacheCreationInputTokens: &second,
+	})
+	codexKnown.BillingProviderID = "openai"
+	codexKnown.BillingProviderSource = domain.UsageBillingProviderObserved
+	codexZero := usageEvent("gate-codex-2", domain.UsageTokenMetrics{
+		InputTokens: &totalInput, CachedInputTokens: &second, UncachedInputTokens: &second, OutputTokens: &first,
+		CacheCreationInputTokens: &first,
+	})
+	codexZero.BillingProviderID = "openai"
+	codexZero.BillingProviderSource = domain.UsageBillingProviderObserved
+	if err := s.ApplyUsageChunk(ctx, completeSource.ID, 0, completeSource.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{codexKnown, codexZero}, nil); err != nil {
+		t.Fatalf("apply complete chunk: %v", err)
+	}
+
+	agg, err := s.AggregateUsageSummary(ctx, nil, nil, "", "")
+	if err != nil {
+		t.Fatalf("aggregate summary: %v", err)
+	}
+	// Mixed coverage: the component is unknown while the folded totals stay.
+	if agg.Tokens.CacheCreationInputTokens != nil {
+		t.Fatalf("mixed-scope bucket = %v, want nil", *agg.Tokens.CacheCreationInputTokens)
+	}
+	if agg.Tokens.InputTokens == nil || *agg.Tokens.InputTokens != 49 {
+		t.Fatalf("input tokens = %v, want 49", usageTokenValue(agg.Tokens.InputTokens))
+	}
+	// Scoped to the fully-known session, the component surfaces as the sum.
+	scoped, err := s.AggregateUsageSummary(ctx, nil, nil, string(domain.UsageSourceCodexRollout), "")
+	if err != nil {
+		t.Fatalf("aggregate scoped summary: %v", err)
+	}
+	if scoped.Tokens.CacheCreationInputTokens == nil || *scoped.Tokens.CacheCreationInputTokens != 6 {
+		t.Fatalf("scoped bucket = %v, want 6", scoped.Tokens.CacheCreationInputTokens)
+	}
+
+	models, err := s.ListUsageModelAggregates(ctx, partial.ID)
+	if err != nil {
+		t.Fatalf("list model aggregates: %v", err)
+	}
+	for _, model := range models {
+		if model.Tokens.CacheCreationInputTokens != nil {
+			t.Fatalf("partial-coverage model aggregate bucket = %v, want nil", *model.Tokens.CacheCreationInputTokens)
+		}
+	}
+}
+
+// The legacy repairer owns attribution and provider usage only: it must never
+// write the cache-creation bucket on its own (ADR 0006 Decision 3, open item 3).
+func TestApplyLegacyUsageRepairsLeaveCacheCreationUntouched(t *testing.T) {
+	dataDir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dataDir)
+	ctx := context.Background()
+	sess := seedUsageSession(t, s, domain.HarnessCodex)
+	now := time.Unix(1700000000, 0).UTC()
+	source := seedUsageSource(t, s, sess, now)
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db"))
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	if _, err := raw.Exec(`
+INSERT INTO model_usage_events (
+    binding_id, usage_source_id, provider_id, billing_provider_id, model_id,
+    usage_measurement_kind, input_tokens, cached_input_tokens,
+    uncached_input_tokens, output_tokens, provider_usage_json, source_event_key
+) VALUES (?, ?, 'openai', NULL, 'gpt-5', 'native_reported', 20, 5, 15, 4, NULL, 'legacy-bucket')`, source.BindingID, source.ID); err != nil {
+		t.Fatalf("seed legacy event: %v", err)
+	}
+
+	candidates, err := s.ListLegacyUsageEvents(ctx, source.ID)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("list legacy events: n=%d err=%v", len(candidates), err)
+	}
+	sources, err := s.ListLegacyUsageSources(ctx)
+	if err != nil || len(sources) != 1 {
+		t.Fatalf("list legacy sources: n=%d err=%v", len(sources), err)
+	}
+	total := int64(42)
+	applied, err := s.ApplyLegacyUsageRepairs(ctx, []domain.LegacyUsageRepair{{
+		Candidate:               candidates[0],
+		ExpectedFileIdentity:    sources[0].Source.FileIdentity,
+		ExpectedByteOffset:      sources[0].Source.ByteOffset,
+		ExpectedParserStateJSON: sources[0].Source.ParserStateJSON,
+		ExpectedSourceUpdatedAt: sources[0].Source.UpdatedAt,
+		BillingProviderID:       "openai",
+		BillingProviderSource:   domain.UsageBillingProviderObserved,
+		Costs: domain.UsageEventCosts{
+			EstimatedCostNanos: &total, PricingVersion: "catalog-v2",
+		},
+	}}, now.Add(time.Minute))
+	if err != nil || applied != 1 {
+		t.Fatalf("apply legacy repairs: applied=%d err=%v", applied, err)
+	}
+
+	var billingProvider sql.NullString
+	var bucket sql.NullInt64
+	if err := raw.QueryRow(`SELECT billing_provider_id, cache_creation_input_tokens FROM model_usage_events
+WHERE source_event_key = 'legacy-bucket'`).Scan(&billingProvider, &bucket); err != nil {
+		t.Fatalf("read repaired row: %v", err)
+	}
+	if !billingProvider.Valid || billingProvider.String != "openai" {
+		t.Fatalf("billing provider = %v, want repaired openai", billingProvider)
+	}
+	if bucket.Valid {
+		t.Fatalf("repair wrote a cache-creation bucket: %d", bucket.Int64)
+	}
+}

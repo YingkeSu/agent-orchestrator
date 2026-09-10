@@ -16,7 +16,12 @@ import { formatTokenCount } from "../lib/format-token-count";
 
 type TrendBucket = components["schemas"]["UsageTrendBucketResponse"];
 
-type SeriesKey = "uncachedInputTokens" | "cachedInputTokens" | "outputTokens" | "cost";
+type SeriesKey =
+	| "uncachedInputTokens"
+	| "cacheCreationInputTokens"
+	| "cachedInputTokens"
+	| "outputTokens"
+	| "cost";
 
 const NANOS_PER_DOLLAR = 1_000_000_000;
 
@@ -45,6 +50,12 @@ export function UsageTrendChart({
 	);
 	const series: { key: SeriesKey; label: string; color: string; yAxisId: "tokens" | "cost" }[] = [
 		{ key: "uncachedInputTokens", label: t("usage.newInput"), color: "var(--color-accent)", yAxisId: "tokens" },
+		{
+			key: "cacheCreationInputTokens",
+			label: t("usage.trendCacheCreation"),
+			color: "var(--color-status-validating)",
+			yAxisId: "tokens",
+		},
 		{ key: "cachedInputTokens", label: t("usage.cachedInput"), color: "var(--color-status-working)", yAxisId: "tokens" },
 		{ key: "outputTokens", label: t("usage.output"), color: "var(--color-status-merged)", yAxisId: "tokens" },
 		{ key: "cost", label: t("usage.trendCost"), color: "var(--color-status-in-review)", yAxisId: "cost" },
@@ -55,6 +66,7 @@ export function UsageTrendChart({
 			buckets.map((bucket) => ({
 				time: new Date(bucket.bucketStart).getTime(),
 				uncachedInputTokens: bucket.uncachedInputTokens,
+				cacheCreationInputTokens: bucket.cacheCreationInputTokens,
 				cachedInputTokens: bucket.cachedInputTokens,
 				outputTokens: bucket.outputTokens,
 				cost: bucket.costNanos === null || bucket.costNanos === undefined ? null : bucket.costNanos / NANOS_PER_DOLLAR,

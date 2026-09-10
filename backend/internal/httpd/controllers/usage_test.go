@@ -713,3 +713,85 @@ func TestUsageAPISessionRuntimeStatsNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404", status)
 	}
 }
+
+// The additive cache-creation field rides every totals-shaped surface and the
+// trend/request-log payloads, nil when unknown (ADR 0006 Decisions 4/6).
+func TestUsageAPISurfacesCacheCreationAcrossPayloads(t *testing.T) {
+	bucket := int64(3)
+	svc := &fakeUsageSummaryService{
+		global: domain.GlobalUsageSummary{
+			RequestCount: 1,
+			Totals: domain.UsageMetricTotals{
+				InputTokens: ptrInt64(30), CachedInputTokens: ptrInt64(7),
+				UncachedInputTokens: ptrInt64(23), OutputTokens: ptrInt64(4),
+				CacheCreationInputTokens: &bucket,
+			},
+		},
+		trend: domain.GlobalUsageTrend{
+			BucketSize: domain.UsageTrendBucketHour,
+			Buckets: []domain.UsageTrendBucketTotals{
+				{
+					BucketStart: time.Date(2026, 9, 8, 13, 0, 0, 0, time.UTC),
+					InputTokens: ptrInt64(30), CacheCreationInputTokens: &bucket,
+				},
+				{
+					BucketStart: time.Date(2026, 9, 8, 14, 0, 0, 0, time.UTC),
+					InputTokens: ptrInt64(30), CacheCreationInputTokens: nil,
+				},
+			},
+		},
+		logPage: domain.UsageRequestLogPage{Items: []domain.UsageRequestLogEntry{
+			{
+				ID: 7, ModelID: "claude-x", SourceKind: domain.UsageSourceClaudeMain,
+				InputTokens: ptrInt64(30), CacheCreationInputTokens: &bucket,
+			},
+		}},
+	}
+	srv := newUsageTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/summary", "")
+	if status != http.StatusOK {
+		t.Fatalf("summary status = %d, body=%s", status, body)
+	}
+	var summary struct {
+		Totals struct {
+			CacheCreationInputTokens *int64 `json:"cacheCreationInputTokens"`
+			ProcessedTokens          *int64 `json:"processedTokens"`
+		} `json:"totals"`
+	}
+	mustJSON(t, body, &summary)
+	if summary.Totals.CacheCreationInputTokens == nil || *summary.Totals.CacheCreationInputTokens != 3 {
+		t.Fatalf("summary = %s", body)
+	}
+
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/usage/trend?from=2026-09-08T00:00:00Z&to=2026-09-08T23:00:00Z", "")
+	if status != http.StatusOK {
+		t.Fatalf("trend status = %d, body=%s", status, body)
+	}
+	var trend struct {
+		Buckets []struct {
+			CacheCreationInputTokens *int64 `json:"cacheCreationInputTokens"`
+		} `json:"buckets"`
+	}
+	mustJSON(t, body, &trend)
+	if len(trend.Buckets) != 2 || trend.Buckets[0].CacheCreationInputTokens == nil ||
+		*trend.Buckets[0].CacheCreationInputTokens != 3 || trend.Buckets[1].CacheCreationInputTokens != nil {
+		t.Fatalf("trend = %s", body)
+	}
+
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/usage/log", "")
+	if status != http.StatusOK {
+		t.Fatalf("log status = %d, body=%s", status, body)
+	}
+	var log struct {
+		Items []struct {
+			ID                       int64  `json:"id"`
+			CacheCreationInputTokens *int64 `json:"cacheCreationInputTokens"`
+		} `json:"items"`
+	}
+	mustJSON(t, body, &log)
+	if len(log.Items) != 1 || log.Items[0].CacheCreationInputTokens == nil ||
+		*log.Items[0].CacheCreationInputTokens != 3 {
+		t.Fatalf("log = %s", body)
+	}
+}

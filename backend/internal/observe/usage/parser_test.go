@@ -1183,3 +1183,105 @@ func TestParseCodexNullInfoDoesNotResetTheCumulativeBaseline(t *testing.T) {
 		t.Fatalf("baseline = %+v, want the latest cumulative total", state.Codex.Baseline)
 	}
 }
+
+// The write bucket leaves the fold as its own certified counter: a reported
+// cache_creation_input_tokens is captured verbatim, and a reported 0 stays a
+// known zero rather than collapsing into unknown (ADR 0006 Decision 2).
+func TestParseClaudeCapturesCacheCreationBucket(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	source := usageSource(domain.UsageSourceClaudeMain)
+	records := []jsonlRecord{
+		{Offset: 0, Data: []byte(`{"type":"assistant","uuid":"one","timestamp":"2026-07-01T10:00:00Z","message":{"id":"msg-1","model":"claude-x","stop_reason":"end_turn","usage":{"input_tokens":20,"cache_creation_input_tokens":3,"cache_read_input_tokens":7,"output_tokens":4}}}`)},
+		{Offset: 300, Data: []byte(`{"type":"assistant","uuid":"two","timestamp":"2026-07-01T10:01:00Z","message":{"id":"msg-2","model":"claude-x","stop_reason":"end_turn","usage":{"input_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}`)},
+	}
+
+	result := parseRecords(source, records, 600, now)
+	if len(result.Events) != 2 {
+		t.Fatalf("events = %d, want 2", len(result.Events))
+	}
+	first := result.Events[0].Tokens
+	if tokenValue(first.CacheCreationInputTokens) != 3 || tokenValue(first.UncachedInputTokens) != 23 ||
+		tokenValue(first.InputTokens) != 30 {
+		t.Fatalf("first tokens = %+v", first)
+	}
+	second := result.Events[1].Tokens
+	if second.CacheCreationInputTokens == nil || *second.CacheCreationInputTokens != 0 {
+		t.Fatalf("reported zero = %v, want a known zero", second.CacheCreationInputTokens)
+	}
+	if tokenValue(second.UncachedInputTokens) != 5 {
+		t.Fatalf("zero-creation tokens = %+v", second)
+	}
+}
+
+// Kimi reports the write bucket natively on every usage.record, normalized
+// through the same Anthropic-vocabulary path as Claude (ADR 0006 premise
+// correction).
+func TestParseKimiCapturesInputCacheCreation(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	source := usageSource(domain.UsageSourceKimiWire)
+	records := []jsonlRecord{
+		{Offset: 0, Data: []byte(`{"id":"u1","time":"2026-07-01T10:00:00Z","type":"usage.record","model":"kimi-k2","usage":{"inputOther":10,"inputCacheCreation":4,"inputCacheRead":6,"output":2}}`)},
+	}
+
+	result := parseRecords(source, records, 100, now)
+	if len(result.Events) != 1 {
+		t.Fatalf("events = %d, want 1", len(result.Events))
+	}
+	tokens := result.Events[0].Tokens
+	if tokenValue(tokens.CacheCreationInputTokens) != 4 || tokenValue(tokens.UncachedInputTokens) != 14 ||
+		tokenValue(tokens.InputTokens) != 20 || tokenValue(tokens.CachedInputTokens) != 6 {
+		t.Fatalf("tokens = %+v", tokens)
+	}
+}
+
+// The Codex per-event bucket comes from the same baseline-delta arithmetic as
+// the other counters, from both the per-event vector and the derived fallback,
+// and a cumulative reading without the counter decodes to a known zero (ADR
+// 0006 open item 4).
+func TestParseCodexCapturesCacheWriteDelta(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	source := usageSource(domain.UsageSourceCodexRollout)
+	records := []jsonlRecord{
+		{Offset: 0, Data: []byte(`{"type":"session_meta","payload":{"model_provider":"openai"}}`)},
+		{Offset: 100, Data: []byte(`{"type":"turn_context","payload":{"model":"gpt-5.6"}}`)},
+		// Per-event vector present: the bucket comes from last_token_usage.
+		{Offset: 200, Data: codexTokenLineWithLast("2026-07-01T10:00:00Z",
+			codexTokenVector{InputTokens: 100, CachedInputTokens: 60, CacheWriteInputTokens: 10, OutputTokens: 20, ReasoningOutputTokens: 5},
+			codexTokenVector{InputTokens: 100, CachedInputTokens: 60, CacheWriteInputTokens: 10, OutputTokens: 20, ReasoningOutputTokens: 5, TotalTokens: 120})},
+		// Cumulative-only record: the bucket is the derived baseline delta.
+		{Offset: 300, Data: codexTokenLine("2026-07-01T10:00:01Z", 160, 90, 16, 35, 8)},
+	}
+	result := parseRecords(source, records, 400, now)
+	if len(result.Events) != 2 {
+		t.Fatalf("events = %d, want 2", len(result.Events))
+	}
+	if got := tokenValue(result.Events[0].Tokens.CacheCreationInputTokens); got != 10 {
+		t.Fatalf("per-event bucket = %d, want 10", got)
+	}
+	second := result.Events[1]
+	if got := tokenValue(second.Tokens.CacheCreationInputTokens); got != 6 {
+		t.Fatalf("derived bucket = %d, want 6", got)
+	}
+	if providerUsageTokens(t, second.ProviderUsageJSON, "ao_derived_cache_write_input_tokens") != 6 {
+		t.Fatalf("derived bucket not persisted in provider usage: %s", second.ProviderUsageJSON)
+	}
+}
+
+func TestParseCodexMissingCacheWriteCounterReadsAsKnownZero(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	source := usageSource(domain.UsageSourceCodexRollout)
+	records := []jsonlRecord{
+		{Offset: 0, Data: []byte(`{"type":"session_meta","payload":{"model_provider":"openai"}}`)},
+		{Offset: 100, Data: []byte(`{"type":"turn_context","payload":{"model":"gpt-5.6"}}`)},
+		{Offset: 200, Data: []byte(`{"timestamp":"2026-07-01T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":60,"output_tokens":20,"reasoning_output_tokens":5,"total_tokens":120}}}}`)},
+	}
+
+	result := parseRecords(source, records, 300, now)
+	if len(result.Events) != 1 {
+		t.Fatalf("events = %d, want 1", len(result.Events))
+	}
+	bucket := result.Events[0].Tokens.CacheCreationInputTokens
+	if bucket == nil || *bucket != 0 {
+		t.Fatalf("absent counter = %v, want a known zero", bucket)
+	}
+}

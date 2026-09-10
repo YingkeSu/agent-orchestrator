@@ -223,19 +223,20 @@ func (c *UsageController) getLog(w http.ResponseWriter, r *http.Request) {
 	items := make([]UsageRequestLogEntryResponse, 0, len(page.Items))
 	for _, entry := range page.Items {
 		items = append(items, UsageRequestLogEntryResponse{
-			ID:                 entry.ID,
-			CreatedAt:          entry.CreatedAt,
-			BillingProviderID:  nullableString(entry.BillingProviderID),
-			ModelID:            entry.ModelID,
-			InputTokens:        entry.InputTokens,
-			CachedInputTokens:  entry.CachedInputTokens,
-			OutputTokens:       entry.OutputTokens,
-			EstimatedCostNanos: entry.EstimatedCostNanos,
-			LLMMS:              entry.LLMMS,
-			FirstTokenMS:       entry.FirstTokenMS,
-			SourceKind:         string(entry.SourceKind),
-			SessionID:          string(entry.SessionID),
-			SessionExists:      entry.SessionExists,
+			ID:                       entry.ID,
+			CreatedAt:                entry.CreatedAt,
+			BillingProviderID:        nullableString(entry.BillingProviderID),
+			ModelID:                  entry.ModelID,
+			InputTokens:              entry.InputTokens,
+			CachedInputTokens:        entry.CachedInputTokens,
+			OutputTokens:             entry.OutputTokens,
+			CacheCreationInputTokens: entry.CacheCreationInputTokens,
+			EstimatedCostNanos:       entry.EstimatedCostNanos,
+			LLMMS:                    entry.LLMMS,
+			FirstTokenMS:             entry.FirstTokenMS,
+			SourceKind:               string(entry.SourceKind),
+			SessionID:                string(entry.SessionID),
+			SessionExists:            entry.SessionExists,
 		})
 	}
 	envelope.WriteJSON(w, http.StatusOK, UsageRequestLogResponse{
@@ -293,13 +294,14 @@ func usageTrendResponse(trend domain.GlobalUsageTrend) UsageTrendResponse {
 	buckets := make([]UsageTrendBucketResponse, 0, len(trend.Buckets))
 	for _, bucket := range trend.Buckets {
 		buckets = append(buckets, UsageTrendBucketResponse{
-			BucketStart:         bucket.BucketStart,
-			RequestCount:        bucket.RequestCount,
-			InputTokens:         bucket.InputTokens,
-			CachedInputTokens:   bucket.CachedInputTokens,
-			UncachedInputTokens: bucket.UncachedInputTokens,
-			OutputTokens:        bucket.OutputTokens,
-			CostNanos:           bucket.CostNanos,
+			BucketStart:              bucket.BucketStart,
+			RequestCount:             bucket.RequestCount,
+			InputTokens:              bucket.InputTokens,
+			CachedInputTokens:        bucket.CachedInputTokens,
+			UncachedInputTokens:      bucket.UncachedInputTokens,
+			OutputTokens:             bucket.OutputTokens,
+			CacheCreationInputTokens: bucket.CacheCreationInputTokens,
+			CostNanos:                bucket.CostNanos,
 		})
 	}
 	return UsageTrendResponse{BucketSize: string(trend.BucketSize), Buckets: buckets}
@@ -395,11 +397,14 @@ func sessionUsageResponse(summary domain.SessionUsageSummary) SessionUsageRespon
 
 func usageTotalsResponse(totals domain.UsageMetricTotals) UsageTotalsResponse {
 	return UsageTotalsResponse{
-		InputTokens: totals.InputTokens, CachedInputTokens: totals.CachedInputTokens,
-		UncachedInputTokens: totals.UncachedInputTokens,
-		OutputTokens:        totals.OutputTokens, ProcessedTokens: totals.ProcessedTokens,
-		CacheReadTokens: totals.CachedInputTokens,
-		EstimatedCost:   estimatedCostResponse(totals.EstimatedCost),
+		InputTokens:              totals.InputTokens,
+		CachedInputTokens:        totals.CachedInputTokens,
+		UncachedInputTokens:      totals.UncachedInputTokens,
+		OutputTokens:             totals.OutputTokens,
+		CacheCreationInputTokens: totals.CacheCreationInputTokens,
+		ProcessedTokens:          totals.ProcessedTokens,
+		CacheReadTokens:          totals.CachedInputTokens,
+		EstimatedCost:            estimatedCostResponse(totals.EstimatedCost),
 	}
 }
 

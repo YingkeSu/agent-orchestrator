@@ -19,8 +19,9 @@ const maxHourTrendRange = 31 * 24 * time.Hour
 // continuous; a bucket whose metric is not fully known keeps a nil component
 // (nil/unknown never zero). Hour buckets are clamped to day buckets when the
 // range spans more than 31 days, and the response echoes the actual size.
-// Cache creation is folded into uncached input by the V1 pipeline, so no
-// separate cache-creation series is derived.
+// CacheCreationInputTokens is the fifth series: the cache-write subcomponent of
+// uncached input, nil for the pre-deployment window and any bucket whose events
+// did not all carry the bucket.
 func (r *SummaryReader) Trend(
 	ctx context.Context,
 	from, to *time.Time,
@@ -109,24 +110,26 @@ func derivedUsageTrendBucket(row domain.UsageTrendBucket) (domain.UsageTrendBuck
 		costNanos = &estimate.TotalNanos
 	}
 	return domain.UsageTrendBucketTotals{
-		BucketStart:         row.BucketStart,
-		RequestCount:        row.EventCount,
-		InputTokens:         row.Tokens.InputTokens,
-		CachedInputTokens:   row.Tokens.CachedInputTokens,
-		UncachedInputTokens: row.Tokens.UncachedInputTokens,
-		OutputTokens:        row.Tokens.OutputTokens,
-		CostNanos:           costNanos,
+		BucketStart:              row.BucketStart,
+		RequestCount:             row.EventCount,
+		InputTokens:              row.Tokens.InputTokens,
+		CachedInputTokens:        row.Tokens.CachedInputTokens,
+		UncachedInputTokens:      row.Tokens.UncachedInputTokens,
+		OutputTokens:             row.Tokens.OutputTokens,
+		CacheCreationInputTokens: row.Tokens.CacheCreationInputTokens,
+		CostNanos:                costNanos,
 	}, nil
 }
 
 func zeroUsageTrendBucket(start time.Time) domain.UsageTrendBucketTotals {
 	zero := int64(0)
 	return domain.UsageTrendBucketTotals{
-		BucketStart:         start,
-		InputTokens:         &zero,
-		CachedInputTokens:   &zero,
-		UncachedInputTokens: &zero,
-		OutputTokens:        &zero,
-		CostNanos:           &zero,
+		BucketStart:              start,
+		InputTokens:              &zero,
+		CachedInputTokens:        &zero,
+		UncachedInputTokens:      &zero,
+		OutputTokens:             &zero,
+		CacheCreationInputTokens: &zero,
+		CostNanos:                &zero,
 	}
 }
