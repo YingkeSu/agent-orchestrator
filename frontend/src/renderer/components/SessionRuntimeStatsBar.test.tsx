@@ -22,6 +22,7 @@ const fullStats: SessionRuntimeStats = {
 		cachedInputTokens: 2_910_000,
 		uncachedInputTokens: 90_000,
 		outputTokens: 3_300_000,
+		cacheCreationInputTokens: 45_000,
 		processedTokens: 6_300_000,
 		cacheReadTokens: 2_910_000,
 		estimatedCost: null,
@@ -71,6 +72,21 @@ describe("SessionRuntimeStatsBar", () => {
 		expect(bar).toHaveTextContent("— tok/s");
 		expect(bar).toHaveTextContent("cache hit —");
 		expect(bar).not.toHaveTextContent("0 rounds");
+	});
+
+	// A truncated payload can drop fields entirely; a missing field is as
+	// unknown as an explicit null, so it renders the marker rather than
+	// crashing or rendering a partial number.
+	it("treats fields missing from a truncated payload as unknown, like nulls", () => {
+		const truncated: SessionRuntimeStats = { ...fullStats };
+		delete (truncated as Partial<SessionRuntimeStats>).outputTokensPerSecond;
+		delete (truncated as Partial<SessionRuntimeStats>).cacheHitRate;
+
+		renderBar(truncated);
+
+		const bar = screen.getByTestId("session-runtime-stats");
+		expect(bar).toHaveTextContent("— tok/s");
+		expect(bar).toHaveTextContent("cache hit —");
 	});
 
 	it("renders a known zero as a zero, distinct from the unknown marker", () => {

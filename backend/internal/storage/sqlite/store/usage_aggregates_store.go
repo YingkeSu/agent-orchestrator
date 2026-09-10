@@ -81,6 +81,7 @@ func usageScopeGenViewFromRow(row gen.AggregateUsageByProviderRow) usageScopeGen
 			row.CachedInputTokens, row.KnownCachedInputTokenCount,
 			row.UncachedInputTokens, row.KnownUncachedInputTokenCount,
 			row.OutputTokens, row.KnownOutputTokenCount,
+			row.CacheCreationInputTokens, row.KnownCacheCreationTokenCount,
 		),
 		cost: scopeCostAggregate(
 			row.EventCount, row.PricedEventCount, row.PricedTotalNanos,
@@ -97,12 +98,13 @@ func usageScopeGenViewFromRow(row gen.AggregateUsageByProviderRow) usageScopeGen
 // scopeTokenMetrics applies the same full-knowledge rule as the summary
 // aggregate: a summed metric is only meaningful when every event in the group
 // carried it.
-func scopeTokenMetrics(eventCount, inputTokens, knownInputCount, cachedInputTokens, knownCachedInputCount, uncachedInputTokens, knownUncachedInputCount, outputTokens, knownOutputCount int64) domain.UsageTokenMetrics {
+func scopeTokenMetrics(eventCount, inputTokens, knownInputCount, cachedInputTokens, knownCachedInputCount, uncachedInputTokens, knownUncachedInputCount, outputTokens, knownOutputCount, cacheCreationInputTokens, knownCacheCreationCount int64) domain.UsageTokenMetrics {
 	return domain.UsageTokenMetrics{
-		InputTokens:         int64PtrWhen(inputTokens, knownInputCount == eventCount),
-		CachedInputTokens:   int64PtrWhen(cachedInputTokens, knownCachedInputCount == eventCount),
-		UncachedInputTokens: int64PtrWhen(uncachedInputTokens, knownUncachedInputCount == eventCount),
-		OutputTokens:        int64PtrWhen(outputTokens, knownOutputCount == eventCount),
+		InputTokens:              int64PtrWhen(inputTokens, knownInputCount == eventCount),
+		CachedInputTokens:        int64PtrWhen(cachedInputTokens, knownCachedInputCount == eventCount),
+		UncachedInputTokens:      int64PtrWhen(uncachedInputTokens, knownUncachedInputCount == eventCount),
+		OutputTokens:             int64PtrWhen(outputTokens, knownOutputCount == eventCount),
+		CacheCreationInputTokens: int64PtrWhen(cacheCreationInputTokens, knownCacheCreationCount == eventCount),
 	}
 }
 

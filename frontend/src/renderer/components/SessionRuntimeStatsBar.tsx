@@ -29,12 +29,8 @@ function formatTokensPerSecond(value: number): string {
 	});
 }
 
-function Segment({ text, title }: { text: string; title?: string }) {
-	return (
-		<span className="whitespace-nowrap" title={title}>
-			{text}
-		</span>
-	);
+function Segment({ text }: { text: string }) {
+	return <span className="whitespace-nowrap">{text}</span>;
 }
 
 function GroupDivider() {
@@ -61,18 +57,21 @@ function MetricDivider() {
  */
 export function SessionRuntimeStatsBar({ stats }: { stats: SessionRuntimeStats }) {
 	const { t } = useTranslation();
-	// Tolerate a truncated payload: unknown stays unknown instead of crashing.
+	// Tolerate a truncated payload: a field missing from the wire is as
+	// unknown as an explicit null, so every metric reads unknown instead of
+	// crashing or rendering a partial number.
+	const isUnknown = (value: number | null | undefined): value is null | undefined =>
+		value === null || value === undefined;
 	const coverage = stats.firstTokenCoverage ?? { covered: 0, total: 0 };
 	const totals = stats.totals ?? {};
 	const duration = (ms: number | null | undefined) =>
-		ms === null || ms === undefined ? UNKNOWN : formatRuntimeDurationMs(ms);
-	const firstTokenTitle =
-		stats.firstTokenAvgMs === null || stats.firstTokenAvgMs === undefined
-			? undefined
-			: t("inspector.runtime.firstTokenCoverage", {
-				covered: coverage.covered,
-				total: coverage.total,
-			});
+		isUnknown(ms) ? UNKNOWN : formatRuntimeDurationMs(ms);
+	const firstTokenTitle = isUnknown(stats.firstTokenAvgMs)
+		? undefined
+		: t("inspector.runtime.firstTokenCoverage", {
+			covered: coverage.covered,
+			total: coverage.total,
+		});
 
 	return (
 		<div
@@ -81,7 +80,7 @@ export function SessionRuntimeStatsBar({ stats }: { stats: SessionRuntimeStats }
 		>
 			<Segment
 				text={
-					stats.rounds === null || stats.rounds === undefined
+					isUnknown(stats.rounds)
 						? UNKNOWN
 						: t("inspector.runtime.rounds", { count: stats.rounds })
 				}
@@ -89,7 +88,7 @@ export function SessionRuntimeStatsBar({ stats }: { stats: SessionRuntimeStats }
 			<MetricDivider />
 			<Segment
 				text={
-					stats.steps === null || stats.steps === undefined
+					isUnknown(stats.steps)
 						? UNKNOWN
 						: t("inspector.runtime.steps", { count: stats.steps })
 				}
@@ -114,7 +113,7 @@ export function SessionRuntimeStatsBar({ stats }: { stats: SessionRuntimeStats }
 			<MetricDivider />
 			<Segment
 				text={
-					stats.outputTokensPerSecond === null
+					isUnknown(stats.outputTokensPerSecond)
 						? t("inspector.runtime.tokensPerSecond", { count: UNKNOWN })
 						: t("inspector.runtime.tokensPerSecond", {
 							count: formatTokensPerSecond(stats.outputTokensPerSecond),
@@ -124,7 +123,7 @@ export function SessionRuntimeStatsBar({ stats }: { stats: SessionRuntimeStats }
 			<GroupDivider />
 			<Segment
 				text={
-					stats.cacheHitRate === null
+					isUnknown(stats.cacheHitRate)
 						? t("inspector.runtime.cacheHitRate", { percent: UNKNOWN })
 						: t("inspector.runtime.cacheHitRate", {
 							percent: `${(stats.cacheHitRate * 100).toFixed(1)}%`,

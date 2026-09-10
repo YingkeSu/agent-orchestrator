@@ -239,10 +239,11 @@ func (r *SummaryReader) RuntimeStats(ctx context.Context, sessionID domain.Sessi
 // the whole sum unknown.
 func scopeTokenTotals(models []domain.UsageModelAggregate) domain.UsageTokenMetrics {
 	return domain.UsageTokenMetrics{
-		InputTokens:         aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.InputTokens }),
-		CachedInputTokens:   aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.CachedInputTokens }),
-		UncachedInputTokens: aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.UncachedInputTokens }),
-		OutputTokens:        aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.OutputTokens }),
+		InputTokens:              aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.InputTokens }),
+		CachedInputTokens:        aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.CachedInputTokens }),
+		UncachedInputTokens:      aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.UncachedInputTokens }),
+		OutputTokens:             aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.OutputTokens }),
+		CacheCreationInputTokens: aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 { return model.Tokens.CacheCreationInputTokens }),
 	}
 }
 
@@ -355,7 +356,12 @@ func usageTotals(models []domain.UsageModelAggregate) (domain.UsageMetricTotals,
 		UncachedInputTokens: aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 {
 			return model.Tokens.UncachedInputTokens
 		}),
-		OutputTokens:  output,
+		OutputTokens: output,
+		// The write bucket is a subcomponent of uncached input, never added to
+		// the totals equation; it surfaces only when every event carried it.
+		CacheCreationInputTokens: aggregateMetric(models, func(model domain.UsageModelAggregate) *int64 {
+			return model.Tokens.CacheCreationInputTokens
+		}),
 		EstimatedCost: estimate,
 	}
 	if input != nil && output != nil {

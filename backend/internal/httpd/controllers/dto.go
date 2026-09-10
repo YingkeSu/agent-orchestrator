@@ -1368,13 +1368,14 @@ type ListCompactSessionUsageResponse struct {
 // in each event's bounded provider usage object, where a field the provider
 // adds later survives without a schema change on this boundary.
 type UsageTotalsResponse struct {
-	InputTokens         *int64                 `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input."`
-	CachedInputTokens   *int64                 `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens."`
-	UncachedInputTokens *int64                 `json:"uncachedInputTokens" minimum:"0" description:"Input not read from an existing provider cache. Includes cache writes."`
-	OutputTokens        *int64                 `json:"outputTokens" minimum:"0" description:"Total output, including provider-specific subsets such as reasoning output."`
-	ProcessedTokens     *int64                 `json:"processedTokens" minimum:"0" description:"Canonical input plus output. Null when either component is unknown."`
-	CacheReadTokens     *int64                 `json:"cacheReadTokens" minimum:"0" description:"Deprecated compatibility alias for cachedInputTokens."`
-	EstimatedCost       *EstimatedCostResponse `json:"estimatedCost"`
+	InputTokens              *int64                 `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input."`
+	CachedInputTokens        *int64                 `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens."`
+	UncachedInputTokens      *int64                 `json:"uncachedInputTokens" minimum:"0" description:"Input not read from an existing provider cache. Includes cache writes."`
+	OutputTokens             *int64                 `json:"outputTokens" minimum:"0" description:"Total output, including provider-specific subsets such as reasoning output."`
+	CacheCreationInputTokens *int64                 `json:"cacheCreationInputTokens" minimum:"0" description:"Cache creation (cache write) input tokens; subcomponent of uncachedInputTokens, never added to inputTokens or processedTokens. OpenAI calls the same bucket cache_write_input_tokens. Null when not fully known."`
+	ProcessedTokens          *int64                 `json:"processedTokens" minimum:"0" description:"Canonical input plus output. Null when either component is unknown."`
+	CacheReadTokens          *int64                 `json:"cacheReadTokens" minimum:"0" description:"Deprecated compatibility alias for cachedInputTokens."`
+	EstimatedCost            *EstimatedCostResponse `json:"estimatedCost"`
 }
 
 // UsageModelResponse is telemetry grouped by model. The billing provider is a
@@ -1527,19 +1528,20 @@ type UsageRequestLogQuery struct {
 // open. llmMs and firstTokenMs are the request-level timing facts: null when
 // the event has no certified timing row, never a fabricated zero.
 type UsageRequestLogEntryResponse struct {
-	ID                 int64      `json:"id" format:"int64"`
-	CreatedAt          *time.Time `json:"createdAt" format:"date-time" description:"Event timestamp, null for pre-capture events."`
-	BillingProviderID  *string    `json:"billingProviderId" description:"Billing catalog provider, null when attribution is pending."`
-	ModelID            string     `json:"modelId"`
-	InputTokens        *int64     `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input."`
-	CachedInputTokens  *int64     `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache."`
-	OutputTokens       *int64     `json:"outputTokens" minimum:"0" description:"Total output."`
-	EstimatedCostNanos *int64     `json:"estimatedCostNanos" minimum:"0" description:"Durable nano-USD estimate, null when not yet priced."`
-	LLMMS              *int64     `json:"llmMs" minimum:"0" description:"LLM elapsed in milliseconds (transcript-clock interval), null when unknown."`
-	FirstTokenMS       *int64     `json:"firstTokenMs" minimum:"0" description:"First-token latency in milliseconds (user send to first response received), null when unknown."`
-	SourceKind         string     `json:"sourceKind" enum:"claude_main,claude_subagent,codex_rollout,kimi_wire"`
-	SessionID          string     `json:"sessionId" description:"Owning session id."`
-	SessionExists      bool       `json:"sessionExists" description:"Whether the owning session row still exists and can be opened."`
+	ID                       int64      `json:"id" format:"int64"`
+	CreatedAt                *time.Time `json:"createdAt" format:"date-time" description:"Event timestamp, null for pre-capture events."`
+	BillingProviderID        *string    `json:"billingProviderId" description:"Billing catalog provider, null when attribution is pending."`
+	ModelID                  string     `json:"modelId"`
+	InputTokens              *int64     `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input."`
+	CachedInputTokens        *int64     `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache."`
+	OutputTokens             *int64     `json:"outputTokens" minimum:"0" description:"Total output."`
+	CacheCreationInputTokens *int64     `json:"cacheCreationInputTokens" minimum:"0" description:"Cache creation (cache write) input tokens; subcomponent of uncached input. OpenAI calls the same bucket cache_write_input_tokens. Null when unknown (pre-0131 events, absent or oversized provider objects)."`
+	EstimatedCostNanos       *int64     `json:"estimatedCostNanos" minimum:"0" description:"Durable nano-USD estimate, null when not yet priced."`
+	LLMMS                    *int64     `json:"llmMs" minimum:"0" description:"LLM elapsed in milliseconds (transcript-clock interval), null when unknown."`
+	FirstTokenMS             *int64     `json:"firstTokenMs" minimum:"0" description:"First-token latency in milliseconds (user send to first response received), null when unknown."`
+	SourceKind               string     `json:"sourceKind" enum:"claude_main,claude_subagent,codex_rollout,kimi_wire"`
+	SessionID                string     `json:"sessionId" description:"Owning session id."`
+	SessionExists            bool       `json:"sessionExists" description:"Whether the owning session row still exists and can be opened."`
 }
 
 // UsageRequestLogResponse is one bounded page of request-log events.
@@ -1574,16 +1576,17 @@ type UsageTrendQuery struct {
 // UsageTrendBucketResponse is one time-bucketed usage aggregate. Absent
 // buckets carry explicit zeros so the chart stays continuous; a bucket whose
 // metric is not fully known keeps a nil component (nil/unknown never zero).
-// Cache creation is folded into uncached input by the V1 pipeline and has no
-// separate series here.
+// cacheCreationInputTokens is the fifth series: the cache-write subcomponent of
+// uncached input, null for the pre-deployment window.
 type UsageTrendBucketResponse struct {
-	BucketStart         time.Time `json:"bucketStart" format:"date-time"`
-	RequestCount        int64     `json:"requestCount" minimum:"0" description:"Count of usage events in the bucket (token-event granularity)."`
-	InputTokens         *int64    `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input. Null when not fully known."`
-	CachedInputTokens   *int64    `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache. Null when not fully known."`
-	UncachedInputTokens *int64    `json:"uncachedInputTokens" minimum:"0" description:"Input not read from an existing provider cache; includes cache writes. Null when not fully known."`
-	OutputTokens        *int64    `json:"outputTokens" minimum:"0" description:"Total output. Null when not fully known."`
-	CostNanos           *int64    `json:"costNanos" minimum:"0" description:"Durable estimated cost in nano-USD. Null when the bucket has no known lower bound."`
+	BucketStart              time.Time `json:"bucketStart" format:"date-time"`
+	RequestCount             int64     `json:"requestCount" minimum:"0" description:"Count of usage events in the bucket (token-event granularity)."`
+	InputTokens              *int64    `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input. Null when not fully known."`
+	CachedInputTokens        *int64    `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache. Null when not fully known."`
+	UncachedInputTokens      *int64    `json:"uncachedInputTokens" minimum:"0" description:"Input not read from an existing provider cache; includes cache writes. Null when not fully known."`
+	OutputTokens             *int64    `json:"outputTokens" minimum:"0" description:"Total output. Null when not fully known."`
+	CacheCreationInputTokens *int64    `json:"cacheCreationInputTokens" minimum:"0" description:"Cache creation (cache write) input tokens; subcomponent of uncachedInputTokens. OpenAI calls the same bucket cache_write_input_tokens. Null when not fully known."`
+	CostNanos                *int64    `json:"costNanos" minimum:"0" description:"Durable estimated cost in nano-USD. Null when the bucket has no known lower bound."`
 }
 
 // UsageTrendResponse is the cross-session time-bucketed usage series over the

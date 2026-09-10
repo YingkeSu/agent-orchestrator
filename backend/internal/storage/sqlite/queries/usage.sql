@@ -345,6 +345,7 @@ SELECT
     event.billing_provider_source, event.model_id, event.usage_measurement_kind,
     event.input_tokens, event.cached_input_tokens,
     event.uncached_input_tokens, event.output_tokens,
+    event.cache_creation_input_tokens,
     event.provider_usage_json, event.created_at
 FROM model_usage_events event
 WHERE event.binding_id = ? AND event.source_event_key = ?;
@@ -354,12 +355,23 @@ INSERT INTO model_usage_events (
     binding_id, usage_source_id, provider_id, billing_provider_id,
     billing_provider_source, model_id, usage_measurement_kind,
     input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
+    cache_creation_input_tokens,
     provider_usage_json,
     input_cost_nanos, cached_input_cost_nanos, output_cost_nanos,
     estimated_cost_nanos, pricing_version,
     source_event_key, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id;
+
+-- name: EnrichModelUsageEventCacheCreation :execrows
+-- Replaying a durable prefix can supply the cache-write bucket for an event
+-- stored before migration 0131 existed, exactly like the bounded provider
+-- object above. A captured bucket is never overwritten: the column fills once,
+-- then the write-once event contract holds.
+UPDATE model_usage_events
+SET cache_creation_input_tokens = sqlc.arg(cache_creation_input_tokens)
+WHERE id = sqlc.arg(id)
+  AND cache_creation_input_tokens IS NULL;
 
 -- name: RehomeOpenUsageEventToReplacementSource :execrows
 -- A physically replaced transcript re-emits the same logical event under the
@@ -585,6 +597,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -632,6 +646,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -699,6 +715,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -746,6 +764,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -799,6 +819,7 @@ SELECT
     event.input_tokens,
     event.cached_input_tokens,
     event.output_tokens,
+    event.cache_creation_input_tokens,
     event.estimated_cost_nanos,
     source.kind AS source_kind,
     binding.session_id,
@@ -841,6 +862,8 @@ SELECT
     CAST(COUNT(rows.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(rows.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(rows.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(rows.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(rows.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(rows.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(rows.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN rows.billing_provider_source = 'observed' AND (
@@ -867,6 +890,7 @@ FROM (
         mue.cached_input_tokens,
         mue.uncached_input_tokens,
         mue.output_tokens,
+        mue.cache_creation_input_tokens,
         mue.estimated_cost_nanos,
         mue.billing_provider_source,
         mue.input_cost_nanos,
@@ -974,8 +998,12 @@ WHERE ub.session_id = ?;
 -- name: ListConversationRuntimeTurnFacts :many
 -- Chat-mode runtime statistics (timing ADR #9): one row per conversation turn
 -- on the session's active branch lineage. Turns are restricted to the session's
--- own conversation and to the active lineage the timeline shows (rolled-back,
--- promoted, and cancelled turns are discarded); daemon-only turns (compaction,
+-- own conversation and to the active lineage the timeline shows: like
+-- SelectConversationTurns, a turn only counts when it carries in-lineage
+-- content at or before its branch's fork cutoff, so an edit-fork ancestor turn
+-- whose items all fall beyond the cutoff (its replacement lives on the child
+-- branch) is dropped instead of double-counting chat LLM time. Rolled-back,
+-- promoted, and cancelled turns are discarded; daemon-only turns (compaction,
 -- provider-adopted resumes) carry no prompt. The store pairs these rows with
 -- ListConversationRuntimeContentRows to derive the per-turn facts.
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
@@ -1005,6 +1033,15 @@ WHERE turn.conversation_id IN (SELECT conversations.id FROM conversations WHERE 
   AND turn.promoted_to_turn_id IS NULL
   AND turn.rolled_back_at IS NULL
   AND turn.state <> 'cancelled'
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = turn.id
+        AND lineage_message.sequence <= path.max_sequence
+      UNION ALL
+      SELECT 1 FROM conversation_activities AS lineage_activity
+      WHERE lineage_activity.turn_id = turn.id
+        AND lineage_activity.sequence <= path.max_sequence
+  ))
 ORDER BY turn.requested_at, turn.rowid;
 
 -- name: ListConversationRuntimeContentRows :many
@@ -1014,6 +1051,10 @@ ORDER BY turn.requested_at, turn.rowid;
 -- tool elapsed, and step counts with full timestamp precision (the driver's
 -- stored text format is not parseable by SQLite date functions). Rows with a
 -- NULL turn_id are dropped by the caller: only turn-attributed work counts.
+-- Messages also carry revision and streaming so the caller can tell a row
+-- inserted whole by the settle fallback (revision 0, not streaming) from one
+-- that entered the streaming pipeline; activities always report 0 because
+-- their created_at certifies first content unconditionally.
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
     FROM conversations
@@ -1035,6 +1076,8 @@ SELECT
     CAST(conversation_messages.role AS TEXT) AS role,
     CAST(conversation_messages.origin AS TEXT) AS origin,
     '' AS status,
+    conversation_messages.revision AS revision,
+    conversation_messages.streaming AS streaming,
     conversation_messages.created_at AS created_at,
     conversation_messages.updated_at AS updated_at
 FROM conversation_messages
@@ -1048,6 +1091,8 @@ SELECT
     '' AS role,
     '' AS origin,
     CAST(conversation_activities.status AS TEXT) AS status,
+    0 AS revision,
+    0 AS streaming,
     conversation_activities.created_at AS created_at,
     conversation_activities.updated_at AS updated_at
 FROM conversation_activities

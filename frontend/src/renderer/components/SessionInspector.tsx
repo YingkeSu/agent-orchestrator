@@ -318,16 +318,19 @@ const SummaryView = memo(function SummaryView({
 			}
 			pullRequestTitle={prSectionTitle}
 			usage={
-				showRuntimeError ? (
-					<Section title={t("inspector.runtime.title")}>
-						<p className={inspectorEmptyClass} role="alert">
-							{t("inspector.runtime.loadFailed")}
-						</p>
-					</Section>
-				) : showRuntime || showUsage ? (
+				showRuntimeError || showRuntime || showUsage ? (
 					<Section title={t("inspector.runtime.title")}>
 						<div className="flex min-w-0 flex-col gap-3">
-							{runtimeQuery.data ? <SessionRuntimeStatsBar stats={runtimeQuery.data} /> : null}
+							{/* The two reads are independent: a runtime-stats blip
+							    renders its own failure inline and must not hide
+							    the token/cost facts below. */}
+							{showRuntimeError ? (
+								<p className={inspectorEmptyClass} role="alert">
+									{t("inspector.runtime.loadFailed")}
+								</p>
+							) : runtimeQuery.data ? (
+								<SessionRuntimeStatsBar stats={runtimeQuery.data} />
+							) : null}
 							{showUsageError ? (
 								<p className={inspectorEmptyClass} role="alert">
 									{t("inspector.usage.processedTokensUnavailable")}

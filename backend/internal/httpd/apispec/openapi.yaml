@@ -8503,6 +8503,14 @@ components:
           type:
           - "null"
           - string
+        cacheCreationInputTokens:
+          description: Cache creation (cache write) input tokens; subcomponent of
+            uncached input. OpenAI calls the same bucket cache_write_input_tokens.
+            Null when unknown (pre-0131 events, absent or oversized provider objects).
+          minimum: 0
+          type:
+          - "null"
+          - integer
         cachedInputTokens:
           description: Input read from an existing provider cache.
           minimum: 0
@@ -8573,6 +8581,7 @@ components:
       - inputTokens
       - cachedInputTokens
       - outputTokens
+      - cacheCreationInputTokens
       - estimatedCostNanos
       - llmMs
       - firstTokenMs
@@ -12412,6 +12421,14 @@ components:
       type: object
     UsageTotalsResponse:
       properties:
+        cacheCreationInputTokens:
+          description: Cache creation (cache write) input tokens; subcomponent of
+            uncachedInputTokens, never added to inputTokens or processedTokens. OpenAI
+            calls the same bucket cache_write_input_tokens. Null when not fully known.
+          minimum: 0
+          type:
+          - "null"
+          - integer
         cacheReadTokens:
           description: Deprecated compatibility alias for cachedInputTokens.
           minimum: 0
@@ -12462,6 +12479,7 @@ components:
       - cachedInputTokens
       - uncachedInputTokens
       - outputTokens
+      - cacheCreationInputTokens
       - processedTokens
       - cacheReadTokens
       - estimatedCost
@@ -12471,6 +12489,14 @@ components:
         bucketStart:
           format: date-time
           type: string
+        cacheCreationInputTokens:
+          description: Cache creation (cache write) input tokens; subcomponent of
+            uncachedInputTokens. OpenAI calls the same bucket cache_write_input_tokens.
+            Null when not fully known.
+          minimum: 0
+          type:
+          - "null"
+          - integer
         cachedInputTokens:
           description: Input read from an existing provider cache. Null when not fully
             known.
@@ -12517,6 +12543,7 @@ components:
       - cachedInputTokens
       - uncachedInputTokens
       - outputTokens
+      - cacheCreationInputTokens
       - costNanos
       type: object
     UsageTrendResponse:

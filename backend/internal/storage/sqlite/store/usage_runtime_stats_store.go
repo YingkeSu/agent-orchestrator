@@ -93,16 +93,27 @@ func (s *Store) ListConversationRuntimeTurnFacts(ctx context.Context, sessionID 
 			// Content of a discarded (rolled-back, promoted, cancelled) turn.
 			continue
 		}
-		// The earliest assistant content row anchors the first-token interval
-		// (ADR Decision 3); the chat driver stamps assistant message rows when
-		// the first streaming delta arrives. User prompts never anchor it.
+		// The earliest certified assistant content row anchors the first-token
+		// interval (ADR Decision 3); the chat driver stamps assistant message
+		// rows when the first streaming delta arrives. User prompts never
+		// anchor it.
 		anchorsFirstToken := false
 		switch row.RowKind {
 		case "message":
 			switch domain.MessageRole(row.Role) {
 			case domain.MessageRoleAssistant:
 				fact.assistantCount++
-				anchorsFirstToken = true
+				// SettleAssistantMessage's fallback inserts a row whose deltas
+				// AO never saw (reconnect window) whole at settle time: born
+				// not-streaming with revision 0, and only streaming-pipeline
+				// writes (delta appends, settles, edits) bump revision. Such a
+				// row still counts as a step, but its created_at is the
+				// settlement timestamp, so it must not anchor first-token:
+				// the turn stays unknown (nil) instead of reporting an
+				// inflated request-to-settlement interval (ADR Decision 3).
+				if row.Revision > 0 || row.Streaming != 0 {
+					anchorsFirstToken = true
+				}
 			case domain.MessageRoleUser:
 				if promptBearingMessageOrigins[domain.MessageOrigin(row.Origin)] {
 					fact.promptBearing = true

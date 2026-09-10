@@ -718,3 +718,36 @@ func TestSummaryReaderRuntimeStatsChatNegativeLLMRemainderIsUnknown(t *testing.T
 		t.Fatalf("rounds = %+v, want 1", got.Rounds)
 	}
 }
+
+// The write bucket flows through the same full-knowledge gate as the other
+// components: one event without it makes the whole scope unknown (ADR 0006
+// Decision 4), and it never enters the processedTokens equation.
+func TestUsageTotalsGateCacheCreationCoverage(t *testing.T) {
+	known := testUsageMetrics(30, 7, 23, 4)
+	creation := int64(3)
+	known.CacheCreationInputTokens = &creation
+	knownCost := completeCostAggregate(1, 50, 30, 7, 4)
+	totals, err := usageTotals([]domain.UsageModelAggregate{
+		{Tokens: known, Cost: knownCost},
+	})
+	mustNoError(t, err)
+	if totals.CacheCreationInputTokens == nil || *totals.CacheCreationInputTokens != 3 {
+		t.Fatalf("known totals = %+v, want bucket 3", totals)
+	}
+	if totals.UncachedInputTokens == nil || *totals.UncachedInputTokens != 23 {
+		t.Fatalf("uncached totals = %+v", totals)
+	}
+
+	mixed := testUsageMetrics(30, 7, 23, 4)
+	mixedTotals, err := usageTotals([]domain.UsageModelAggregate{
+		{Tokens: known, Cost: knownCost},
+		{Tokens: mixed, Cost: completeCostAggregate(1, 20, 30, 7, 4)},
+	})
+	mustNoError(t, err)
+	if mixedTotals.CacheCreationInputTokens != nil {
+		t.Fatalf("mixed totals = %+v, want nil bucket", mixedTotals)
+	}
+	if mixedTotals.InputTokens == nil || *mixedTotals.InputTokens != 60 {
+		t.Fatalf("mixed input = %+v", mixedTotals.InputTokens)
+	}
+}

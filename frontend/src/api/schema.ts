@@ -2968,6 +2968,8 @@ export interface components {
         ControllersUsageRequestLogEntryResponse: {
             /** @description Billing catalog provider, null when attribution is pending. */
             billingProviderId: null | string;
+            /** @description Cache creation (cache write) input tokens; subcomponent of uncached input. OpenAI calls the same bucket cache_write_input_tokens. Null when unknown (pre-0131 events, absent or oversized provider objects). */
+            cacheCreationInputTokens: null | number;
             /** @description Input read from an existing provider cache. */
             cachedInputTokens: null | number;
             /**
@@ -4451,6 +4453,8 @@ export interface components {
             totals: components["schemas"]["UsageTotalsResponse"];
         };
         UsageTotalsResponse: {
+            /** @description Cache creation (cache write) input tokens; subcomponent of uncachedInputTokens, never added to inputTokens or processedTokens. OpenAI calls the same bucket cache_write_input_tokens. Null when not fully known. */
+            cacheCreationInputTokens: null | number;
             /** @description Deprecated compatibility alias for cachedInputTokens. */
             cacheReadTokens: null | number;
             /** @description Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens. */
@@ -4468,6 +4472,8 @@ export interface components {
         UsageTrendBucketResponse: {
             /** Format: date-time */
             bucketStart: string;
+            /** @description Cache creation (cache write) input tokens; subcomponent of uncachedInputTokens. OpenAI calls the same bucket cache_write_input_tokens. Null when not fully known. */
+            cacheCreationInputTokens: null | number;
             /** @description Input read from an existing provider cache. Null when not fully known. */
             cachedInputTokens: null | number;
             /** @description Durable estimated cost in nano-USD. Null when the bucket has no known lower bound. */

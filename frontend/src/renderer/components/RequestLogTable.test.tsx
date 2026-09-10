@@ -26,6 +26,7 @@ function logEntry(overrides: Partial<LogEntry>): LogEntry {
 		inputTokens: 100,
 		cachedInputTokens: null,
 		outputTokens: 40,
+		cacheCreationInputTokens: null,
 		estimatedCostNanos: 135,
 		llmMs: null,
 		firstTokenMs: null,

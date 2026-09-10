@@ -467,6 +467,20 @@ func (s *Store) ApplyUsageChunk(
 					}
 					insertedEvent = true
 				}
+				// A pre-0131 row's NULL write bucket fills from the replay, the
+				// same one-way enrichment the provider object below gets.
+				if ev.Tokens.CacheCreationInputTokens != nil {
+					rows, err := q.EnrichModelUsageEventCacheCreation(ctx, gen.EnrichModelUsageEventCacheCreationParams{
+						CacheCreationInputTokens: ptrInt64ToNull(ev.Tokens.CacheCreationInputTokens),
+						ID:                       existing.ID,
+					})
+					if err != nil {
+						return err
+					}
+					if rows > 0 {
+						insertedEvent = true
+					}
+				}
 				if existing.ProviderUsageJson.Valid || ev.ProviderUsageJSON == "" {
 					continue
 				}
@@ -578,8 +592,11 @@ func (s *Store) ListUsageCostCandidates(
 	return out, nil
 }
 
-// storedUsageTokens rebuilds the canonical token vector from one durable row. A
-// NULL column is an uncollected metric; a stored zero is a known zero.
+// storedUsageTokens rebuilds the four CAS-guarded token counters from one
+// durable row. A NULL column is an uncollected metric; a stored zero is a known
+// zero. The cache-creation bucket is deliberately not read here: the pricing
+// estimator and the repairer take their write bucket from provider_usage_json,
+// and the CAS guards they feed stay the pre-split four-counter contract.
 func storedUsageTokens(input, cached, uncached, output sql.NullInt64) domain.UsageTokenMetrics {
 	return domain.UsageTokenMetrics{
 		InputTokens:         nullInt64Ptr(input),
@@ -882,19 +899,20 @@ func (s *Store) ListUsageRequestLog(
 	out := make([]domain.UsageRequestLogEntry, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, domain.UsageRequestLogEntry{
-			ID:                 row.ID,
-			CreatedAt:          nullableTime(row.CreatedAt),
-			BillingProviderID:  row.BillingProviderID.String,
-			ModelID:            row.ModelID,
-			InputTokens:        nullInt64Ptr(row.InputTokens),
-			CachedInputTokens:  nullInt64Ptr(row.CachedInputTokens),
-			OutputTokens:       nullInt64Ptr(row.OutputTokens),
-			EstimatedCostNanos: nullInt64Ptr(row.EstimatedCostNanos),
-			LLMMS:              nullInt64Ptr(row.LlmMs),
-			FirstTokenMS:       nullInt64Ptr(row.FirstTokenMs),
-			SourceKind:         row.SourceKind,
-			SessionID:          row.SessionID,
-			SessionExists:      row.SessionExists != 0,
+			ID:                       row.ID,
+			CreatedAt:                nullableTime(row.CreatedAt),
+			BillingProviderID:        row.BillingProviderID.String,
+			ModelID:                  row.ModelID,
+			InputTokens:              nullInt64Ptr(row.InputTokens),
+			CachedInputTokens:        nullInt64Ptr(row.CachedInputTokens),
+			OutputTokens:             nullInt64Ptr(row.OutputTokens),
+			CacheCreationInputTokens: nullInt64Ptr(row.CacheCreationInputTokens),
+			EstimatedCostNanos:       nullInt64Ptr(row.EstimatedCostNanos),
+			LLMMS:                    nullInt64Ptr(row.LlmMs),
+			FirstTokenMS:             nullInt64Ptr(row.FirstTokenMs),
+			SourceKind:               row.SourceKind,
+			SessionID:                row.SessionID,
+			SessionExists:            row.SessionExists != 0,
 		})
 	}
 	return out, nil
@@ -932,10 +950,11 @@ func (s *Store) AggregateUsageSummary(ctx context.Context, from, to *time.Time, 
 	return domain.GlobalUsageAggregate{
 		EventCount: row.EventCount,
 		Tokens: domain.UsageTokenMetrics{
-			InputTokens:         int64PtrWhen(row.InputTokens, row.KnownInputTokenCount == row.EventCount),
-			CachedInputTokens:   int64PtrWhen(row.CachedInputTokens, row.KnownCachedInputTokenCount == row.EventCount),
-			UncachedInputTokens: int64PtrWhen(row.UncachedInputTokens, row.KnownUncachedInputTokenCount == row.EventCount),
-			OutputTokens:        int64PtrWhen(row.OutputTokens, row.KnownOutputTokenCount == row.EventCount),
+			InputTokens:              int64PtrWhen(row.InputTokens, row.KnownInputTokenCount == row.EventCount),
+			CachedInputTokens:        int64PtrWhen(row.CachedInputTokens, row.KnownCachedInputTokenCount == row.EventCount),
+			UncachedInputTokens:      int64PtrWhen(row.UncachedInputTokens, row.KnownUncachedInputTokenCount == row.EventCount),
+			OutputTokens:             int64PtrWhen(row.OutputTokens, row.KnownOutputTokenCount == row.EventCount),
+			CacheCreationInputTokens: int64PtrWhen(row.CacheCreationInputTokens, row.KnownCacheCreationTokenCount == row.EventCount),
 		},
 		Cost: domain.UsageCostAggregate{
 			EventCount: row.EventCount, PricedEventCount: row.PricedEventCount, PricedTotalNanos: row.PricedTotalNanos,
@@ -1034,10 +1053,11 @@ func (s *Store) AggregateUsageTrend(
 			BucketStart: time.Unix(row.BucketKey*bucketSeconds, 0).UTC(),
 			EventCount:  row.EventCount,
 			Tokens: domain.UsageTokenMetrics{
-				InputTokens:         int64PtrWhen(row.InputTokens, row.KnownInputTokenCount == row.EventCount),
-				CachedInputTokens:   int64PtrWhen(row.CachedInputTokens, row.KnownCachedInputTokenCount == row.EventCount),
-				UncachedInputTokens: int64PtrWhen(row.UncachedInputTokens, row.KnownUncachedInputTokenCount == row.EventCount),
-				OutputTokens:        int64PtrWhen(row.OutputTokens, row.KnownOutputTokenCount == row.EventCount),
+				InputTokens:              int64PtrWhen(row.InputTokens, row.KnownInputTokenCount == row.EventCount),
+				CachedInputTokens:        int64PtrWhen(row.CachedInputTokens, row.KnownCachedInputTokenCount == row.EventCount),
+				UncachedInputTokens:      int64PtrWhen(row.UncachedInputTokens, row.KnownUncachedInputTokenCount == row.EventCount),
+				OutputTokens:             int64PtrWhen(row.OutputTokens, row.KnownOutputTokenCount == row.EventCount),
+				CacheCreationInputTokens: int64PtrWhen(row.CacheCreationInputTokens, row.KnownCacheCreationTokenCount == row.EventCount),
 			},
 			Cost: domain.UsageCostAggregate{
 				EventCount: row.EventCount, PricedEventCount: row.PricedEventCount, PricedTotalNanos: row.PricedTotalNanos,
@@ -1139,25 +1159,26 @@ func usageSourceInsertParams(rec domain.UsageSourceRecord) gen.InsertUsageSource
 
 func usageEventInsertParams(source gen.GetUsageSourceWithBindingAndSessionRow, ev domain.ModelUsageEvent) gen.InsertModelUsageEventParams {
 	return gen.InsertModelUsageEventParams{
-		BindingID:             source.BindingID,
-		UsageSourceID:         source.SourceID,
-		ProviderID:            string(ev.ProviderID),
-		BillingProviderID:     stringOrNull(ev.BillingProviderID),
-		BillingProviderSource: stringOrNull(string(ev.BillingProviderSource)),
-		ModelID:               ev.ModelID,
-		UsageMeasurementKind:  string(ev.MeasurementKind),
-		InputTokens:           ptrInt64ToNull(ev.Tokens.InputTokens),
-		CachedInputTokens:     ptrInt64ToNull(ev.Tokens.CachedInputTokens),
-		UncachedInputTokens:   ptrInt64ToNull(ev.Tokens.UncachedInputTokens),
-		OutputTokens:          ptrInt64ToNull(ev.Tokens.OutputTokens),
-		ProviderUsageJson:     stringOrNull(ev.ProviderUsageJSON),
-		InputCostNanos:        ptrInt64ToNull(ev.Costs.InputCostNanos),
-		CachedInputCostNanos:  ptrInt64ToNull(ev.Costs.CachedInputCostNanos),
-		OutputCostNanos:       ptrInt64ToNull(ev.Costs.OutputCostNanos),
-		EstimatedCostNanos:    ptrInt64ToNull(ev.Costs.EstimatedCostNanos),
-		PricingVersion:        ev.Costs.PricingVersion,
-		SourceEventKey:        ev.SourceEventKey,
-		CreatedAt:             sql.NullTime{Time: ev.CreatedAt.UTC(), Valid: !ev.CreatedAt.IsZero()},
+		BindingID:                source.BindingID,
+		UsageSourceID:            source.SourceID,
+		ProviderID:               string(ev.ProviderID),
+		BillingProviderID:        stringOrNull(ev.BillingProviderID),
+		BillingProviderSource:    stringOrNull(string(ev.BillingProviderSource)),
+		ModelID:                  ev.ModelID,
+		UsageMeasurementKind:     string(ev.MeasurementKind),
+		InputTokens:              ptrInt64ToNull(ev.Tokens.InputTokens),
+		CachedInputTokens:        ptrInt64ToNull(ev.Tokens.CachedInputTokens),
+		UncachedInputTokens:      ptrInt64ToNull(ev.Tokens.UncachedInputTokens),
+		OutputTokens:             ptrInt64ToNull(ev.Tokens.OutputTokens),
+		CacheCreationInputTokens: ptrInt64ToNull(ev.Tokens.CacheCreationInputTokens),
+		ProviderUsageJson:        stringOrNull(ev.ProviderUsageJSON),
+		InputCostNanos:           ptrInt64ToNull(ev.Costs.InputCostNanos),
+		CachedInputCostNanos:     ptrInt64ToNull(ev.Costs.CachedInputCostNanos),
+		OutputCostNanos:          ptrInt64ToNull(ev.Costs.OutputCostNanos),
+		EstimatedCostNanos:       ptrInt64ToNull(ev.Costs.EstimatedCostNanos),
+		PricingVersion:           ev.Costs.PricingVersion,
+		SourceEventKey:           ev.SourceEventKey,
+		CreatedAt:                sql.NullTime{Time: ev.CreatedAt.UTC(), Valid: !ev.CreatedAt.IsZero()},
 	}
 }
 
@@ -1187,6 +1208,12 @@ func usageEventReplayDisposition(existing gen.GetModelUsageEventByKeyRow, event 
 		existing.CachedInputTokens == ptrInt64ToNull(event.Tokens.CachedInputTokens) &&
 		existing.UncachedInputTokens == ptrInt64ToNull(event.Tokens.UncachedInputTokens) &&
 		existing.OutputTokens == ptrInt64ToNull(event.Tokens.OutputTokens)
+	// A stored NULL cache-creation bucket predates migration 0131, so a replay
+	// carrying the bucket enriches the row instead of conflicting with it; a
+	// captured bucket is compared like any other counter.
+	cacheCreationMatches := !existing.CacheCreationInputTokens.Valid ||
+		existing.CacheCreationInputTokens == ptrInt64ToNull(event.Tokens.CacheCreationInputTokens)
+	genericMatches = genericMatches && cacheCreationMatches
 	// A stored object is immutable; a stored NULL predates the capture and the
 	// replay is allowed to enrich it.
 	if genericMatches && existing.ProviderUsageJson.Valid && event.ProviderUsageJSON != "" {
@@ -1214,10 +1241,11 @@ func usageAggregateFromGen(row gen.AggregateUsageBySessionHarnessModelRow) domai
 		// A summed metric is only meaningful when every event in the group
 		// carried it; one uncollected counter makes the whole sum unknown.
 		Tokens: domain.UsageTokenMetrics{
-			InputTokens:         int64PtrWhen(row.InputTokens, row.KnownInputTokenCount == row.EventCount),
-			CachedInputTokens:   int64PtrWhen(row.CachedInputTokens, row.KnownCachedInputTokenCount == row.EventCount),
-			UncachedInputTokens: int64PtrWhen(row.UncachedInputTokens, row.KnownUncachedInputTokenCount == row.EventCount),
-			OutputTokens:        int64PtrWhen(row.OutputTokens, row.KnownOutputTokenCount == row.EventCount),
+			InputTokens:              int64PtrWhen(row.InputTokens, row.KnownInputTokenCount == row.EventCount),
+			CachedInputTokens:        int64PtrWhen(row.CachedInputTokens, row.KnownCachedInputTokenCount == row.EventCount),
+			UncachedInputTokens:      int64PtrWhen(row.UncachedInputTokens, row.KnownUncachedInputTokenCount == row.EventCount),
+			OutputTokens:             int64PtrWhen(row.OutputTokens, row.KnownOutputTokenCount == row.EventCount),
+			CacheCreationInputTokens: int64PtrWhen(row.CacheCreationInputTokens, row.KnownCacheCreationTokenCount == row.EventCount),
 		},
 		Cost: domain.UsageCostAggregate{
 			EventCount: row.EventCount, PricedEventCount: row.PricedEventCount, PricedTotalNanos: row.PricedTotalNanos,
@@ -1249,6 +1277,7 @@ func validateUsageEvent(harness domain.AgentHarness, event domain.ModelUsageEven
 	metrics := event.Tokens
 	for _, value := range []*int64{
 		metrics.InputTokens, metrics.CachedInputTokens, metrics.UncachedInputTokens, metrics.OutputTokens,
+		metrics.CacheCreationInputTokens,
 	} {
 		if value != nil && *value < 0 {
 			return errors.New("usage event tokens must be nonnegative")
@@ -1257,6 +1286,13 @@ func validateUsageEvent(harness domain.AgentHarness, event domain.ModelUsageEven
 	if metrics.InputTokens != nil && metrics.CachedInputTokens != nil && metrics.UncachedInputTokens != nil &&
 		*metrics.InputTokens != *metrics.CachedInputTokens+*metrics.UncachedInputTokens {
 		return errors.New("usage input does not equal cached plus uncached input")
+	}
+	// Mirror of the migration's cache-creation CHECK (ADR 0006 Decision 2): the
+	// normalizers already guarantee the invariant, and the SQL pin plus this
+	// write-path check are defense in depth.
+	if metrics.CacheCreationInputTokens != nil && metrics.UncachedInputTokens != nil &&
+		*metrics.CacheCreationInputTokens > *metrics.UncachedInputTokens {
+		return errors.New("usage cache creation exceeds uncached input")
 	}
 	// ALTER TABLE cannot add a CHECK that reads another column, so the pairing
 	// the schema comment describes is enforced here: a provider without a source
