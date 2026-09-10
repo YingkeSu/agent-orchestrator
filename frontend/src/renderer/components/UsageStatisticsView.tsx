@@ -86,16 +86,20 @@ function rangeFor(preset: RangePreset): { from?: string; to?: string } {
 type MetricCardProps = {
 	label: string;
 	value: string | null;
+	hint?: string;
 };
 
-function MetricCard({ label, value }: MetricCardProps) {
+function MetricCard({ label, value, hint }: MetricCardProps) {
 	return (
 		<Card size="sm">
 			<CardHeader>
 				<CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
 			</CardHeader>
-			<CardContent className="text-2xl font-semibold tabular-nums tracking-tight">
-				{value ?? "—"}
+			<CardContent className="flex flex-col gap-1">
+				<span className="text-2xl font-semibold tabular-nums tracking-tight">
+					{value ?? "—"}
+				</span>
+				{hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
 			</CardContent>
 		</Card>
 	);
@@ -254,10 +258,15 @@ export function UsageStatisticsView() {
 							/>
 						</div>
 
-						<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+						<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
 							<MetricCard
 								label={t("usage.newInput")}
 								value={formatTokens(totals?.uncachedInputTokens)}
+							/>
+							<MetricCard
+								label={t("usage.cacheCreation")}
+								value={formatTokens(totals?.cacheCreationInputTokens)}
+								hint={t("usage.cacheCreationHint")}
 							/>
 							<MetricCard
 								label={t("usage.cachedInput")}
