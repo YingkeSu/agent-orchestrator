@@ -1,7 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { UsageTrendBucketResponse } from "../../api/schema";
+import type { components } from "../../api/schema";
 import { UsageTrendChart } from "./UsageTrendChart";
+
+type TrendBucket = components["schemas"]["UsageTrendBucketResponse"];
 
 // jsdom gives ResponsiveContainer a zero-size box, in which recharts mounts
 // nothing. Rendering the chart body at an explicit size keeps the legend
@@ -9,12 +11,11 @@ import { UsageTrendChart } from "./UsageTrendChart";
 vi.mock("recharts", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("recharts")>();
 	const { cloneElement } = await import("react");
-	const ResponsiveContainer = ({ children }: { children: React.ReactElement }) =>
+	type SizedChart = React.ReactElement<{ width?: number; height?: number }>;
+	const ResponsiveContainer = ({ children }: { children: SizedChart }) =>
 		cloneElement(children, { width: 600, height: 256 });
 	return { ...actual, ResponsiveContainer };
 });
-
-type TrendBucket = UsageTrendBucketResponse;
 
 function bucket(overrides: Partial<TrendBucket>): TrendBucket {
 	return {
