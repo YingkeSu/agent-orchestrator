@@ -86,11 +86,14 @@ WHERE binding_id = ?
 ORDER BY generation, id;
 
 -- name: ListWatchableUsageSources :many
+-- acp_usage sources are durable AO state with no file behind them; the
+-- transcript watcher and file ingestor must never pick them up.
 SELECT us.*
 FROM usage_sources us
 JOIN usage_bindings ub ON ub.id = us.binding_id
 JOIN sessions s ON s.id = ub.session_id
-WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
+WHERE us.kind <> 'acp_usage'
+  AND (s.is_terminated = 0 OR ub.state = 'finalizing')
   AND NOT (
       us.state = 'complete'
       AND us.last_error_code = 'artifact_replaced'
@@ -1100,3 +1103,34 @@ JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
 WHERE conversation_activities.conversation_id IN (SELECT conversations.id FROM conversations WHERE conversations.session_id = sqlc.arg(session_id))
   AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
 ORDER BY created_at;
+
+-- name: ListACPUsageProviderEvents :many
+-- Bounded scan of one conversation's archived ACP usage reports, oldest first.
+-- The autoincrement id is the insertion-order cursor; provider_event_id is
+-- empty for these events, so the row identity itself is the stable dedupe
+-- ingredient.
+SELECT
+    conversation_provider_events.id AS event_row_id,
+    conversation_id,
+    session_id,
+    payload_json,
+    received_at
+FROM conversation_provider_events
+WHERE conversation_id = ?
+  AND method = 'usage'
+  AND conversation_provider_events.id > ?
+ORDER BY conversation_provider_events.id
+LIMIT ?;
+
+-- name: ListConversationsWithACPUsage :many
+-- Every conversation that has archived ACP usage reports for a session whose
+-- harness has no certified transcript source. Backfill rescans these from the
+-- durable source cursor; already-certified prefixes are skipped per
+-- conversation by the certifier.
+SELECT DISTINCT
+    events.conversation_id AS conversation_id,
+    events.session_id AS session_id
+FROM conversation_provider_events events
+JOIN sessions s ON s.id = events.session_id
+WHERE events.method = 'usage'
+  AND s.harness = 'opencode';

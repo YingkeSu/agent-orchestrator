@@ -19,7 +19,7 @@ export AO_RELEASE_REPO="${AO_RELEASE_REPO:-$FORK_REPO}"
 cd "$REPO_ROOT/frontend"
 if [ ! -d node_modules ]; then
 	echo "==> frontend/node_modules missing; running npm install"
-	npm install --no-fund --no-audit
+	npm ci --no-fund --no-audit
 fi
 
 echo "==> Packaging (Go daemon + tmux + browser runtime + ACP runtime + Electron)"
@@ -33,6 +33,11 @@ if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
 	exit 1
 fi
 echo "==> Built: $APP_PATH"
+# Repackaging invalidates Electron's upstream seal. Local builds need a fresh
+# ad-hoc seal; retain the runtime entitlements on the nested executables.
+if [ -z "${APPLE_SIGNING_IDENTITY:-}${CSC_LINK:-}" ]; then
+    codesign --force --deep --sign - --preserve-metadata=entitlements "$APP_PATH"
+fi
 
 if [ "${1:-}" = "--no-install" ]; then
 	echo "==> --no-install given; built app left in place"
@@ -52,8 +57,22 @@ if pgrep -x "agent-orchestrator" >/dev/null 2>&1; then
 	fi
 fi
 
-echo "==> Replacing $INSTALL_DIR/$APP_NAME.app"
-rm -rf "$INSTALL_DIR/$APP_NAME.app"
-cp -R "$APP_PATH" "$INSTALL_DIR/"
+# Stage the complete bundle before touching the installed copy. Keep the old
+# version under AO state so a failed launch can be rolled back without download.
+STAGE_DIR="$(mktemp -d "$INSTALL_DIR/.ao-install.XXXXXX")"
+BACKUP_DIR="$HOME/.ao/backups/desktop-$(date +%Y%m%d-%H%M%S)-$$"
+trap 'rmdir "$STAGE_DIR" 2>/dev/null || true' EXIT
+ditto "$APP_PATH" "$STAGE_DIR/$APP_NAME.app"
+if [ -d "$INSTALL_DIR/$APP_NAME.app" ]; then
+    mkdir -p "$BACKUP_DIR"
+    mv "$INSTALL_DIR/$APP_NAME.app" "$BACKUP_DIR/$APP_NAME.app"
+    echo "==> Previous app saved to $BACKUP_DIR"
+fi
+if ! mv "$STAGE_DIR/$APP_NAME.app" "$INSTALL_DIR/$APP_NAME.app"; then
+    if [ -d "$BACKUP_DIR/$APP_NAME.app" ]; then
+        mv "$BACKUP_DIR/$APP_NAME.app" "$INSTALL_DIR/$APP_NAME.app"
+    fi
+    exit 1
+fi
 echo "==> Done. Unsigned build: if macOS blocks first launch, allow it under"
 echo "    System Settings > Privacy & Security."

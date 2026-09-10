@@ -21,7 +21,7 @@
 ## 环境依赖
 
 - Go 1.25.7+(本机已装 Homebrew Go 1.27.1)
-- Node.js 20.19.0+ 和 npm 10
+- Node.js 22 LTS（桌面打包使用，与 build-artifacts 工作流一致）和 npm 10
 - clang / make(编译打包进应用的 tmux、ACP runtime 等;Xcode Command Line Tools 即可)
 
 ## 日常开发(不影响正式安装)
@@ -47,7 +47,7 @@ go run ./cmd/ao status         # 另一个终端里操作
 ## 打包并覆盖正式安装的应用
 
 ```bash
-scripts/fork-dev-install.sh                # 打包 + 替换 /Applications 里的应用
+npm exec --yes --package=node@22 -- bash scripts/fork-dev-install.sh # 打包 + 替换应用
 scripts/fork-dev-install.sh --no-install   # 只打包,产物留在 frontend/out/
 ```
 
@@ -57,8 +57,7 @@ scripts/fork-dev-install.sh --no-install   # 只打包,产物留在 frontend/out
 cd frontend
 AO_RELEASE_REPO=YingkeSu/agent-orchestrator npm run package
 osascript -e 'quit app "Agent Orchestrator"'
-rm -rf "/Applications/Agent Orchestrator.app"
-cp -R "out/Agent Orchestrator-darwin-arm64/Agent Orchestrator.app" /Applications/
+# 使用上面的安装脚本：暂存完整 bundle，将旧版本备份到 ~/.ao/backups 后替换。
 ```
 
 ### 为什么必须设 `AO_RELEASE_REPO`
@@ -73,7 +72,7 @@ cp -R "out/Agent Orchestrator-darwin-arm64/Agent Orchestrator.app" /Applications
 
 ### 签名与数据
 
-- 本地构建**未签名、未公证**。首次打开若被 macOS 拦截,到"系统设置 → 隐私与安全性"
+- 本地构建使用 **ad-hoc 签名，未公证**。首次打开若被 macOS 拦截,到"系统设置 → 隐私与安全性"
   点"仍要打开"。
 - 本地构建与官方版 bundle id 相同(`dev.agent-orchestrator.desktop`),AO 的所有状态都在
   `~/.ao`(daemon 数据、worktrees、Electron 的 `~/.ao/electron`),替换应用后项目、会话、

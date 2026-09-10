@@ -16,6 +16,14 @@ const (
 	UsageSourceClaudeSubagent UsageSourceKind = "claude_subagent"
 	UsageSourceCodexRollout   UsageSourceKind = "codex_rollout"
 	UsageSourceKimiWire       UsageSourceKind = "kimi_wire"
+	// UsageSourceACPUsage certifies token accounting that arrived over the ACP
+	// chat transport and was archived in conversation_provider_events. Worker
+	// harnesses such as opencode write no provider-owned JSONL transcript, so
+	// this is the only certified source for them. Unlike the transcript kinds,
+	// the source artifact is durable AO state (a bounded re-scan of provider
+	// events for one conversation), not a file, and the events carry no
+	// transcript clock: timing fields stay NULL per the timing ADR.
+	UsageSourceACPUsage UsageSourceKind = "acp_usage"
 )
 
 // UsageBindingState tracks the root native-session binding lifecycle.

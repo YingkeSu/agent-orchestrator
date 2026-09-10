@@ -1335,6 +1335,68 @@ func (q *Queries) InsertUsageSource(ctx context.Context, arg InsertUsageSourcePa
 	return i, err
 }
 
+const listACPUsageProviderEvents = `-- name: ListACPUsageProviderEvents :many
+SELECT
+    conversation_provider_events.id AS event_row_id,
+    conversation_id,
+    session_id,
+    payload_json,
+    received_at
+FROM conversation_provider_events
+WHERE conversation_id = ?
+  AND method = 'usage'
+  AND conversation_provider_events.id > ?
+ORDER BY conversation_provider_events.id
+LIMIT ?
+`
+
+type ListACPUsageProviderEventsParams struct {
+	ConversationID string
+	ID             int64
+	Limit          int64
+}
+
+type ListACPUsageProviderEventsRow struct {
+	EventRowID     int64
+	ConversationID string
+	SessionID      domain.SessionID
+	PayloadJson    string
+	ReceivedAt     time.Time
+}
+
+// Bounded scan of one conversation's archived ACP usage reports, oldest first.
+// The autoincrement id is the insertion-order cursor; provider_event_id is
+// empty for these events, so the row identity itself is the stable dedupe
+// ingredient.
+func (q *Queries) ListACPUsageProviderEvents(ctx context.Context, arg ListACPUsageProviderEventsParams) ([]ListACPUsageProviderEventsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listACPUsageProviderEvents, arg.ConversationID, arg.ID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListACPUsageProviderEventsRow{}
+	for rows.Next() {
+		var i ListACPUsageProviderEventsRow
+		if err := rows.Scan(
+			&i.EventRowID,
+			&i.ConversationID,
+			&i.SessionID,
+			&i.PayloadJson,
+			&i.ReceivedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCompactSessionUsage = `-- name: ListCompactSessionUsage :many
 SELECT
     ub.session_id,
@@ -1610,6 +1672,48 @@ func (q *Queries) ListConversationRuntimeTurnFacts(ctx context.Context, sessionI
 			&i.StartedAt,
 			&i.CompletedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConversationsWithACPUsage = `-- name: ListConversationsWithACPUsage :many
+SELECT DISTINCT
+    events.conversation_id AS conversation_id,
+    events.session_id AS session_id
+FROM conversation_provider_events events
+JOIN sessions s ON s.id = events.session_id
+WHERE events.method = 'usage'
+  AND s.harness = 'opencode'
+`
+
+type ListConversationsWithACPUsageRow struct {
+	ConversationID string
+	SessionID      domain.SessionID
+}
+
+// Every conversation that has archived ACP usage reports for a session whose
+// harness has no certified transcript source. Backfill rescans these from the
+// durable source cursor; already-certified prefixes are skipped per
+// conversation by the certifier.
+func (q *Queries) ListConversationsWithACPUsage(ctx context.Context) ([]ListConversationsWithACPUsageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listConversationsWithACPUsage)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConversationsWithACPUsageRow{}
+	for rows.Next() {
+		var i ListConversationsWithACPUsageRow
+		if err := rows.Scan(&i.ConversationID, &i.SessionID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2349,7 +2453,8 @@ SELECT us.id, us.binding_id, us.kind, us.native_session_id, us.subagent_id, us.a
 FROM usage_sources us
 JOIN usage_bindings ub ON ub.id = us.binding_id
 JOIN sessions s ON s.id = ub.session_id
-WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
+WHERE us.kind <> 'acp_usage'
+  AND (s.is_terminated = 0 OR ub.state = 'finalizing')
   AND NOT (
       us.state = 'complete'
       AND us.last_error_code = 'artifact_replaced'
@@ -2365,6 +2470,8 @@ WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
 ORDER BY us.artifact_path, us.generation, us.id
 `
 
+// acp_usage sources are durable AO state with no file behind them; the
+// transcript watcher and file ingestor must never pick them up.
 func (q *Queries) ListWatchableUsageSources(ctx context.Context) ([]UsageSource, error) {
 	rows, err := q.db.QueryContext(ctx, listWatchableUsageSources)
 	if err != nil {
