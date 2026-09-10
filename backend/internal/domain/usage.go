@@ -168,14 +168,20 @@ func ObservedBillingProviderSource(billingProviderID string) UsageBillingProvide
 }
 
 // UsageTokenMetrics is the provider-neutral token vector stored on every usage
-// event. Nil means unknown; a non-nil zero is a known zero. Cache writes are
-// part of uncached input here; their provider-specific split stays in the
-// bounded provider usage object.
+// event. Nil means unknown; a non-nil zero is a known zero.
+// CacheCreationInputTokens is a declared subcomponent of UncachedInputTokens —
+// the cache-write bucket every certified source reports (Anthropic
+// cache_creation_input_tokens, OpenAI cache_write_input_tokens, Kimi
+// inputCacheCreation) — and is not part of the input equation: input stays
+// cached + uncached with writes folded into uncached. It joins the replay
+// comparison like the other counters. Per-provider tier splits stay in the
+// bounded provider usage object for pricing.
 type UsageTokenMetrics struct {
-	InputTokens         *int64
-	CachedInputTokens   *int64
-	UncachedInputTokens *int64
-	OutputTokens        *int64
+	InputTokens              *int64
+	CachedInputTokens        *int64
+	UncachedInputTokens      *int64
+	OutputTokens             *int64
+	CacheCreationInputTokens *int64
 }
 
 // UsageEventCosts is the durable nano-USD estimate stored on one event. Every
@@ -421,19 +427,20 @@ type UsageSummaryDimensions struct {
 // ADR): nil means no certified timing row exists for the event (pre-deployment
 // history, uncertified boundaries), never a measured zero.
 type UsageRequestLogEntry struct {
-	ID                 int64
-	CreatedAt          *time.Time
-	BillingProviderID  string
-	ModelID            string
-	InputTokens        *int64
-	CachedInputTokens  *int64
-	OutputTokens       *int64
-	EstimatedCostNanos *int64
-	LLMMS              *int64
-	FirstTokenMS       *int64
-	SourceKind         UsageSourceKind
-	SessionID          SessionID
-	SessionExists      bool
+	ID                       int64
+	CreatedAt                *time.Time
+	BillingProviderID        string
+	ModelID                  string
+	InputTokens              *int64
+	CachedInputTokens        *int64
+	OutputTokens             *int64
+	CacheCreationInputTokens *int64
+	EstimatedCostNanos       *int64
+	LLMMS                    *int64
+	FirstTokenMS             *int64
+	SourceKind               UsageSourceKind
+	SessionID                SessionID
+	SessionExists            bool
 }
 
 // UsageRequestLogPage is one bounded, newest-first page of usage events plus
@@ -466,21 +473,22 @@ type UsageTrendBucket struct {
 // buckets carry explicit zeros so the chart stays continuous; a bucket whose
 // metric is not fully known keeps a nil component (nil/unknown never zero).
 type UsageTrendBucketTotals struct {
-	BucketStart         time.Time
-	RequestCount        int64
-	InputTokens         *int64
-	CachedInputTokens   *int64
-	UncachedInputTokens *int64
-	OutputTokens        *int64
-	CostNanos           *int64
+	BucketStart              time.Time
+	RequestCount             int64
+	InputTokens              *int64
+	CachedInputTokens        *int64
+	UncachedInputTokens      *int64
+	OutputTokens             *int64
+	CacheCreationInputTokens *int64
+	CostNanos                *int64
 }
 
 // GlobalUsageTrend is the cross-session time-bucketed usage read model over an
 // optional created_at range. Buckets are contiguous and UTC-aligned; the first
 // and last buckets may be partial when the range does not align to bucket
-// edges. Cache creation is not separable in the V1 pipeline: Anthropic cache
-// writes fold into UncachedInputTokens, so no separate cache-creation series
-// is derived.
+// edges. CacheCreationInputTokens is the fifth series: the cache-write
+// subcomponent of uncached input, nil for a bucket whose events' write counts
+// are not fully known (pre-deployment history), never folded back in.
 type GlobalUsageTrend struct {
 	BucketSize UsageTrendBucketSize
 	Buckets    []UsageTrendBucketTotals
@@ -489,12 +497,13 @@ type GlobalUsageTrend struct {
 // UsageMetricTotals is the aggregate metric block used by session, harness,
 // and model summaries.
 type UsageMetricTotals struct {
-	InputTokens         *int64
-	CachedInputTokens   *int64
-	UncachedInputTokens *int64
-	OutputTokens        *int64
-	ProcessedTokens     *int64
-	EstimatedCost       *EstimatedCost
+	InputTokens              *int64
+	CachedInputTokens        *int64
+	UncachedInputTokens      *int64
+	OutputTokens             *int64
+	CacheCreationInputTokens *int64
+	ProcessedTokens          *int64
+	EstimatedCost            *EstimatedCost
 }
 
 // ModelUsageSummary is a per-model aggregate. The billing provider stays a

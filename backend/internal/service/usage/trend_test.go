@@ -182,3 +182,44 @@ func TestTrendEmptyRangeProducesNoBuckets(t *testing.T) {
 		t.Fatalf("buckets = %+v, want none for inverted range", got.Buckets)
 	}
 }
+
+// The fifth series: present buckets surface the bucket when every event
+// carried it, stay nil under partial coverage, and absent buckets zero-fill
+// like the other components (ADR 0006 Decision 4).
+func TestTrendCarriesCacheCreationSeries(t *testing.T) {
+	from := time.Date(2026, 9, 8, 13, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 9, 8, 15, 30, 0, 0, time.UTC)
+	known := testUsageMetrics(30, 7, 23, 4)
+	creation := int64(3)
+	known.CacheCreationInputTokens = &creation
+	store := &usageSummaryStoreStub{trend: []domain.UsageTrendBucket{
+		{
+			BucketStart: from,
+			EventCount:  1,
+			Tokens:      known,
+			Cost:        completeCostAggregate(1, 50, 30, 7, 4),
+		},
+		{
+			BucketStart: time.Date(2026, 9, 8, 15, 0, 0, 0, time.UTC),
+			EventCount:  1,
+			Tokens:      testUsageMetrics(30, 7, 23, 4),
+			Cost:        completeCostAggregate(1, 50, 30, 7, 4),
+		},
+	}}
+
+	got, err := NewSummaryReader(store).Trend(context.Background(), &from, &to, domain.UsageTrendBucketHour, "", "")
+	mustNoError(t, err)
+	if len(got.Buckets) != 3 {
+		t.Fatalf("buckets = %d, want 3", len(got.Buckets))
+	}
+	first, absent, partial := got.Buckets[0], got.Buckets[1], got.Buckets[2]
+	if first.CacheCreationInputTokens == nil || *first.CacheCreationInputTokens != 3 {
+		t.Fatalf("known bucket = %+v, want 3", first)
+	}
+	if absent.CacheCreationInputTokens == nil || *absent.CacheCreationInputTokens != 0 {
+		t.Fatalf("absent bucket = %+v, want explicit zero", absent)
+	}
+	if partial.CacheCreationInputTokens != nil {
+		t.Fatalf("partial bucket = %+v, want nil", *partial.CacheCreationInputTokens)
+	}
+}

@@ -84,6 +84,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -133,6 +135,8 @@ type AggregateUsageByModelRow struct {
 	KnownUncachedInputTokenCount  int64
 	OutputTokens                  int64
 	KnownOutputTokenCount         int64
+	CacheCreationInputTokens      int64
+	KnownCacheCreationTokenCount  int64
 	PricedEventCount              int64
 	PricedTotalNanos              int64
 	ObservedCostEventCount        int64
@@ -182,6 +186,8 @@ func (q *Queries) AggregateUsageByModel(ctx context.Context, arg AggregateUsageB
 			&i.KnownUncachedInputTokenCount,
 			&i.OutputTokens,
 			&i.KnownOutputTokenCount,
+			&i.CacheCreationInputTokens,
+			&i.KnownCacheCreationTokenCount,
 			&i.PricedEventCount,
 			&i.PricedTotalNanos,
 			&i.ObservedCostEventCount,
@@ -223,6 +229,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -272,6 +280,8 @@ type AggregateUsageByProviderRow struct {
 	KnownUncachedInputTokenCount  int64
 	OutputTokens                  int64
 	KnownOutputTokenCount         int64
+	CacheCreationInputTokens      int64
+	KnownCacheCreationTokenCount  int64
 	PricedEventCount              int64
 	PricedTotalNanos              int64
 	ObservedCostEventCount        int64
@@ -319,6 +329,8 @@ func (q *Queries) AggregateUsageByProvider(ctx context.Context, arg AggregateUsa
 			&i.KnownUncachedInputTokenCount,
 			&i.OutputTokens,
 			&i.KnownOutputTokenCount,
+			&i.CacheCreationInputTokens,
+			&i.KnownCacheCreationTokenCount,
 			&i.PricedEventCount,
 			&i.PricedTotalNanos,
 			&i.ObservedCostEventCount,
@@ -361,6 +373,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -399,6 +413,8 @@ type AggregateUsageBySessionHarnessModelRow struct {
 	KnownUncachedInputTokenCount  int64
 	OutputTokens                  int64
 	KnownOutputTokenCount         int64
+	CacheCreationInputTokens      int64
+	KnownCacheCreationTokenCount  int64
 	PricedEventCount              int64
 	PricedTotalNanos              int64
 	ObservedCostEventCount        int64
@@ -439,6 +455,8 @@ func (q *Queries) AggregateUsageBySessionHarnessModel(ctx context.Context, sessi
 			&i.KnownUncachedInputTokenCount,
 			&i.OutputTokens,
 			&i.KnownOutputTokenCount,
+			&i.CacheCreationInputTokens,
+			&i.KnownCacheCreationTokenCount,
 			&i.PricedEventCount,
 			&i.PricedTotalNanos,
 			&i.ObservedCostEventCount,
@@ -477,6 +495,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -525,6 +545,8 @@ type AggregateUsageSummaryRow struct {
 	KnownUncachedInputTokenCount  int64
 	OutputTokens                  int64
 	KnownOutputTokenCount         int64
+	CacheCreationInputTokens      int64
+	KnownCacheCreationTokenCount  int64
 	PricedEventCount              int64
 	PricedTotalNanos              int64
 	ObservedCostEventCount        int64
@@ -565,6 +587,8 @@ func (q *Queries) AggregateUsageSummary(ctx context.Context, arg AggregateUsageS
 		&i.KnownUncachedInputTokenCount,
 		&i.OutputTokens,
 		&i.KnownOutputTokenCount,
+		&i.CacheCreationInputTokens,
+		&i.KnownCacheCreationTokenCount,
 		&i.PricedEventCount,
 		&i.PricedTotalNanos,
 		&i.ObservedCostEventCount,
@@ -594,6 +618,8 @@ SELECT
     CAST(COUNT(rows.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(rows.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(rows.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(rows.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(rows.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(rows.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(rows.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN rows.billing_provider_source = 'observed' AND (
@@ -620,6 +646,7 @@ FROM (
         mue.cached_input_tokens,
         mue.uncached_input_tokens,
         mue.output_tokens,
+        mue.cache_creation_input_tokens,
         mue.estimated_cost_nanos,
         mue.billing_provider_source,
         mue.input_cost_nanos,
@@ -656,6 +683,8 @@ type AggregateUsageTrendRow struct {
 	KnownUncachedInputTokenCount  int64
 	OutputTokens                  int64
 	KnownOutputTokenCount         int64
+	CacheCreationInputTokens      int64
+	KnownCacheCreationTokenCount  int64
 	PricedEventCount              int64
 	PricedTotalNanos              int64
 	ObservedCostEventCount        int64
@@ -708,6 +737,8 @@ func (q *Queries) AggregateUsageTrend(ctx context.Context, arg AggregateUsageTre
 			&i.KnownUncachedInputTokenCount,
 			&i.OutputTokens,
 			&i.KnownOutputTokenCount,
+			&i.CacheCreationInputTokens,
+			&i.KnownCacheCreationTokenCount,
 			&i.PricedEventCount,
 			&i.PricedTotalNanos,
 			&i.ObservedCostEventCount,
@@ -799,6 +830,30 @@ type CompleteUsageBindingIfSettledParams struct {
 
 func (q *Queries) CompleteUsageBindingIfSettled(ctx context.Context, arg CompleteUsageBindingIfSettledParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, completeUsageBindingIfSettled, arg.UsageBindingID, arg.UpdatedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const enrichModelUsageEventCacheCreation = `-- name: EnrichModelUsageEventCacheCreation :execrows
+UPDATE model_usage_events
+SET cache_creation_input_tokens = ?1
+WHERE id = ?2
+  AND cache_creation_input_tokens IS NULL
+`
+
+type EnrichModelUsageEventCacheCreationParams struct {
+	CacheCreationInputTokens sql.NullInt64
+	ID                       int64
+}
+
+// Replaying a durable prefix can supply the cache-write bucket for an event
+// stored before migration 0131 existed, exactly like the bounded provider
+// object above. A captured bucket is never overwritten: the column fills once,
+// then the write-once event contract holds.
+func (q *Queries) EnrichModelUsageEventCacheCreation(ctx context.Context, arg EnrichModelUsageEventCacheCreationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, enrichModelUsageEventCacheCreation, arg.CacheCreationInputTokens, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -899,6 +954,7 @@ SELECT
     event.billing_provider_source, event.model_id, event.usage_measurement_kind,
     event.input_tokens, event.cached_input_tokens,
     event.uncached_input_tokens, event.output_tokens,
+    event.cache_creation_input_tokens,
     event.provider_usage_json, event.created_at
 FROM model_usage_events event
 WHERE event.binding_id = ? AND event.source_event_key = ?
@@ -910,19 +966,20 @@ type GetModelUsageEventByKeyParams struct {
 }
 
 type GetModelUsageEventByKeyRow struct {
-	ID                    int64
-	UsageSourceID         int64
-	ProviderID            string
-	BillingProviderID     sql.NullString
-	BillingProviderSource sql.NullString
-	ModelID               string
-	UsageMeasurementKind  string
-	InputTokens           sql.NullInt64
-	CachedInputTokens     sql.NullInt64
-	UncachedInputTokens   sql.NullInt64
-	OutputTokens          sql.NullInt64
-	ProviderUsageJson     sql.NullString
-	CreatedAt             sql.NullTime
+	ID                       int64
+	UsageSourceID            int64
+	ProviderID               string
+	BillingProviderID        sql.NullString
+	BillingProviderSource    sql.NullString
+	ModelID                  string
+	UsageMeasurementKind     string
+	InputTokens              sql.NullInt64
+	CachedInputTokens        sql.NullInt64
+	UncachedInputTokens      sql.NullInt64
+	OutputTokens             sql.NullInt64
+	CacheCreationInputTokens sql.NullInt64
+	ProviderUsageJson        sql.NullString
+	CreatedAt                sql.NullTime
 }
 
 func (q *Queries) GetModelUsageEventByKey(ctx context.Context, arg GetModelUsageEventByKeyParams) (GetModelUsageEventByKeyRow, error) {
@@ -940,6 +997,7 @@ func (q *Queries) GetModelUsageEventByKey(ctx context.Context, arg GetModelUsage
 		&i.CachedInputTokens,
 		&i.UncachedInputTokens,
 		&i.OutputTokens,
+		&i.CacheCreationInputTokens,
 		&i.ProviderUsageJson,
 		&i.CreatedAt,
 	)
@@ -1139,34 +1197,36 @@ INSERT INTO model_usage_events (
     binding_id, usage_source_id, provider_id, billing_provider_id,
     billing_provider_source, model_id, usage_measurement_kind,
     input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
+    cache_creation_input_tokens,
     provider_usage_json,
     input_cost_nanos, cached_input_cost_nanos, output_cost_nanos,
     estimated_cost_nanos, pricing_version,
     source_event_key, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id
 `
 
 type InsertModelUsageEventParams struct {
-	BindingID             int64
-	UsageSourceID         int64
-	ProviderID            string
-	BillingProviderID     sql.NullString
-	BillingProviderSource sql.NullString
-	ModelID               string
-	UsageMeasurementKind  string
-	InputTokens           sql.NullInt64
-	CachedInputTokens     sql.NullInt64
-	UncachedInputTokens   sql.NullInt64
-	OutputTokens          sql.NullInt64
-	ProviderUsageJson     sql.NullString
-	InputCostNanos        sql.NullInt64
-	CachedInputCostNanos  sql.NullInt64
-	OutputCostNanos       sql.NullInt64
-	EstimatedCostNanos    sql.NullInt64
-	PricingVersion        string
-	SourceEventKey        string
-	CreatedAt             sql.NullTime
+	BindingID                int64
+	UsageSourceID            int64
+	ProviderID               string
+	BillingProviderID        sql.NullString
+	BillingProviderSource    sql.NullString
+	ModelID                  string
+	UsageMeasurementKind     string
+	InputTokens              sql.NullInt64
+	CachedInputTokens        sql.NullInt64
+	UncachedInputTokens      sql.NullInt64
+	OutputTokens             sql.NullInt64
+	CacheCreationInputTokens sql.NullInt64
+	ProviderUsageJson        sql.NullString
+	InputCostNanos           sql.NullInt64
+	CachedInputCostNanos     sql.NullInt64
+	OutputCostNanos          sql.NullInt64
+	EstimatedCostNanos       sql.NullInt64
+	PricingVersion           string
+	SourceEventKey           string
+	CreatedAt                sql.NullTime
 }
 
 func (q *Queries) InsertModelUsageEvent(ctx context.Context, arg InsertModelUsageEventParams) (int64, error) {
@@ -1182,6 +1242,7 @@ func (q *Queries) InsertModelUsageEvent(ctx context.Context, arg InsertModelUsag
 		arg.CachedInputTokens,
 		arg.UncachedInputTokens,
 		arg.OutputTokens,
+		arg.CacheCreationInputTokens,
 		arg.ProviderUsageJson,
 		arg.InputCostNanos,
 		arg.CachedInputCostNanos,
@@ -2071,6 +2132,7 @@ SELECT
     event.input_tokens,
     event.cached_input_tokens,
     event.output_tokens,
+    event.cache_creation_input_tokens,
     event.estimated_cost_nanos,
     source.kind AS source_kind,
     binding.session_id,
@@ -2101,19 +2163,20 @@ type ListUsageRequestLogParams struct {
 }
 
 type ListUsageRequestLogRow struct {
-	ID                 int64
-	CreatedAt          sql.NullTime
-	BillingProviderID  sql.NullString
-	ModelID            string
-	InputTokens        sql.NullInt64
-	CachedInputTokens  sql.NullInt64
-	OutputTokens       sql.NullInt64
-	EstimatedCostNanos sql.NullInt64
-	SourceKind         domain.UsageSourceKind
-	SessionID          domain.SessionID
-	LlmMs              sql.NullInt64
-	FirstTokenMs       sql.NullInt64
-	SessionExists      int64
+	ID                       int64
+	CreatedAt                sql.NullTime
+	BillingProviderID        sql.NullString
+	ModelID                  string
+	InputTokens              sql.NullInt64
+	CachedInputTokens        sql.NullInt64
+	OutputTokens             sql.NullInt64
+	CacheCreationInputTokens sql.NullInt64
+	EstimatedCostNanos       sql.NullInt64
+	SourceKind               domain.UsageSourceKind
+	SessionID                domain.SessionID
+	LlmMs                    sql.NullInt64
+	FirstTokenMs             sql.NullInt64
+	SessionExists            int64
 }
 
 // Newest-first, bounded page of normalized usage events over an optional
@@ -2154,6 +2217,7 @@ func (q *Queries) ListUsageRequestLog(ctx context.Context, arg ListUsageRequestL
 			&i.InputTokens,
 			&i.CachedInputTokens,
 			&i.OutputTokens,
+			&i.CacheCreationInputTokens,
 			&i.EstimatedCostNanos,
 			&i.SourceKind,
 			&i.SessionID,

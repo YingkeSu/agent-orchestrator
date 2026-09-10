@@ -345,6 +345,7 @@ SELECT
     event.billing_provider_source, event.model_id, event.usage_measurement_kind,
     event.input_tokens, event.cached_input_tokens,
     event.uncached_input_tokens, event.output_tokens,
+    event.cache_creation_input_tokens,
     event.provider_usage_json, event.created_at
 FROM model_usage_events event
 WHERE event.binding_id = ? AND event.source_event_key = ?;
@@ -354,12 +355,23 @@ INSERT INTO model_usage_events (
     binding_id, usage_source_id, provider_id, billing_provider_id,
     billing_provider_source, model_id, usage_measurement_kind,
     input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
+    cache_creation_input_tokens,
     provider_usage_json,
     input_cost_nanos, cached_input_cost_nanos, output_cost_nanos,
     estimated_cost_nanos, pricing_version,
     source_event_key, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id;
+
+-- name: EnrichModelUsageEventCacheCreation :execrows
+-- Replaying a durable prefix can supply the cache-write bucket for an event
+-- stored before migration 0131 existed, exactly like the bounded provider
+-- object above. A captured bucket is never overwritten: the column fills once,
+-- then the write-once event contract holds.
+UPDATE model_usage_events
+SET cache_creation_input_tokens = sqlc.arg(cache_creation_input_tokens)
+WHERE id = sqlc.arg(id)
+  AND cache_creation_input_tokens IS NULL;
 
 -- name: RehomeOpenUsageEventToReplacementSource :execrows
 -- A physically replaced transcript re-emits the same logical event under the
@@ -585,6 +597,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -632,6 +646,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -699,6 +715,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -746,6 +764,8 @@ SELECT
     CAST(COUNT(mue.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(mue.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(mue.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN mue.billing_provider_source = 'observed' AND (
@@ -799,6 +819,7 @@ SELECT
     event.input_tokens,
     event.cached_input_tokens,
     event.output_tokens,
+    event.cache_creation_input_tokens,
     event.estimated_cost_nanos,
     source.kind AS source_kind,
     binding.session_id,
@@ -841,6 +862,8 @@ SELECT
     CAST(COUNT(rows.uncached_input_tokens) AS INTEGER) AS known_uncached_input_token_count,
     CAST(COALESCE(SUM(rows.output_tokens), 0) AS INTEGER) AS output_tokens,
     CAST(COUNT(rows.output_tokens) AS INTEGER) AS known_output_token_count,
+    CAST(COALESCE(SUM(rows.cache_creation_input_tokens), 0) AS INTEGER) AS cache_creation_input_tokens,
+    CAST(COUNT(rows.cache_creation_input_tokens) AS INTEGER) AS known_cache_creation_token_count,
     CAST(COUNT(rows.estimated_cost_nanos) AS INTEGER) AS priced_event_count,
     CAST(COALESCE(SUM(rows.estimated_cost_nanos), 0) AS INTEGER) AS priced_total_nanos,
     CAST(COUNT(CASE WHEN rows.billing_provider_source = 'observed' AND (
@@ -867,6 +890,7 @@ FROM (
         mue.cached_input_tokens,
         mue.uncached_input_tokens,
         mue.output_tokens,
+        mue.cache_creation_input_tokens,
         mue.estimated_cost_nanos,
         mue.billing_provider_source,
         mue.input_cost_nanos,

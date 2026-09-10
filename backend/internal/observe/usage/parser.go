@@ -78,6 +78,11 @@ const (
 	integrityCheckpointBytes   = 4 << 10
 )
 
+// codexTokenVector is one cumulative counter reading from a rollout's
+// token_count record. A rollout that omits cache_write_input_tokens decodes it
+// as 0, so its baseline delta is a known zero — the same treatment every other
+// counter in the vector already gets (ADR 0006 open item 4): absence in one
+// cumulative reading reads as zero, not as an unknown bucket.
 type codexTokenVector struct {
 	InputTokens           int64 `json:"input_tokens"`
 	CachedInputTokens     int64 `json:"cached_input_tokens"`
@@ -1095,10 +1100,11 @@ func normalizeOpenAIUsage(input, cachedInput, cacheWriteInput, output int64) (do
 		return domain.UsageTokenMetrics{}, false
 	}
 	return domain.UsageTokenMetrics{
-		InputTokens:         int64Ptr(input),
-		CachedInputTokens:   int64Ptr(cachedInput),
-		UncachedInputTokens: int64Ptr(input - cachedInput),
-		OutputTokens:        int64Ptr(output),
+		InputTokens:              int64Ptr(input),
+		CachedInputTokens:        int64Ptr(cachedInput),
+		UncachedInputTokens:      int64Ptr(input - cachedInput),
+		OutputTokens:             int64Ptr(output),
+		CacheCreationInputTokens: int64Ptr(cacheWriteInput),
 	}, true
 }
 
@@ -1112,10 +1118,11 @@ func normalizeAnthropicUsage(directInput, cacheCreationInput, cachedInput, outpu
 		return domain.UsageTokenMetrics{}, false
 	}
 	return domain.UsageTokenMetrics{
-		InputTokens:         int64Ptr(input),
-		CachedInputTokens:   int64Ptr(cachedInput),
-		UncachedInputTokens: int64Ptr(uncachedInput),
-		OutputTokens:        int64Ptr(output),
+		InputTokens:              int64Ptr(input),
+		CachedInputTokens:        int64Ptr(cachedInput),
+		UncachedInputTokens:      int64Ptr(uncachedInput),
+		OutputTokens:             int64Ptr(output),
+		CacheCreationInputTokens: int64Ptr(cacheCreationInput),
 	}, true
 }
 
