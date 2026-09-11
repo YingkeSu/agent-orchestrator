@@ -1544,7 +1544,7 @@ type UsageRequestLogEntryResponse struct {
 	InputTokens              *int64     `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input."`
 	CachedInputTokens        *int64     `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache."`
 	OutputTokens             *int64     `json:"outputTokens" minimum:"0" description:"Total output."`
-	CacheCreationInputTokens *int64     `json:"cacheCreationInputTokens" minimum:"0" description:"Cache creation (cache write) input tokens; subcomponent of uncached input. OpenAI calls the same bucket cache_write_input_tokens. Null when unknown (pre-0131 events, absent or oversized provider objects)."`
+	CacheCreationInputTokens *int64     `json:"cacheCreationInputTokens" minimum:"0" description:"Cache creation (cache write) input tokens; subcomponent of uncached input. OpenAI calls the same bucket cache_write_input_tokens. Null when unknown (pre-0138 events, absent or oversized provider objects)."`
 	EstimatedCostNanos       *int64     `json:"estimatedCostNanos" minimum:"0" description:"Durable nano-USD estimate, null when not yet priced."`
 	LLMMS                    *int64     `json:"llmMs" minimum:"0" description:"LLM elapsed in milliseconds (transcript-clock interval), null when unknown."`
 	FirstTokenMS             *int64     `json:"firstTokenMs" minimum:"0" description:"First-token latency in milliseconds (user send to first response received), null when unknown."`

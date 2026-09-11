@@ -3009,7 +3009,7 @@ export interface components {
         ControllersUsageRequestLogEntryResponse: {
             /** @description Billing catalog provider, null when attribution is pending. */
             billingProviderId: null | string;
-            /** @description Cache creation (cache write) input tokens; subcomponent of uncached input. OpenAI calls the same bucket cache_write_input_tokens. Null when unknown (pre-0131 events, absent or oversized provider objects). */
+            /** @description Cache creation (cache write) input tokens; subcomponent of uncached input. OpenAI calls the same bucket cache_write_input_tokens. Null when unknown (pre-0138 events, absent or oversized provider objects). */
             cacheCreationInputTokens: null | number;
             /** @description Input read from an existing provider cache. */
             cachedInputTokens: null | number;

@@ -8584,7 +8584,7 @@ components:
         cacheCreationInputTokens:
           description: Cache creation (cache write) input tokens; subcomponent of
             uncached input. OpenAI calls the same bucket cache_write_input_tokens.
-            Null when unknown (pre-0131 events, absent or oversized provider objects).
+            Null when unknown (pre-0138 events, absent or oversized provider objects).
           minimum: 0
           type:
           - "null"
