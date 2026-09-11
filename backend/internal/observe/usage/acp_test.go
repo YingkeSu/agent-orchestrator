@@ -400,3 +400,123 @@ func TestCertifyACPEventRejectsPayloadWithoutUsageObject(t *testing.T) {
 		t.Fatal("malformed payload must not certify")
 	}
 }
+
+func clearConversationUsageModel(t *testing.T, dataDir string, conversationID string) {
+	t.Helper()
+	db := openACPTestDB(t, dataDir)
+	defer func() { _ = db.Close() }()
+	_, err := db.Exec(`UPDATE conversations SET model = NULL WHERE id = ?`, conversationID)
+	mustNoError(t, err)
+}
+
+// A rebound conversation keeps one archive but accumulates rows stamped with
+// each controlling session. Each session's binding must certify only its own
+// rows: the binding is (session_id, harness, native_root_id), and a page that
+// leaked the other session's rows would re-derive their acp:<row_id> keys
+// under a second binding_id and double-count every pre-rebind event.
+func TestACPCertifierDoesNotCrossCertifyReboundConversation(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0).UTC()
+	dataDir := t.TempDir()
+	store, session := seedUsageTestSession(t, dataDir, "usage", domain.HarnessOpenCode, domain.ActivityIdle, "", now)
+	conversationID := seedACPConversation(t, store, session, "conv-acp-rebind")
+	setConversationUsageModel(t, dataDir, conversationID, "deepseek-v4-flash")
+	rebound, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: session.ProjectID,
+		Kind:      domain.KindWorker,
+		Harness:   domain.HarnessOpenCode,
+		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	mustNoError(t, err)
+
+	// Pre-rebind turn archived under the original session, post-rebind turn
+	// under the replacement session; distinct token counts identify them.
+	seedACPUsageEvent(t, store, session, sessionControllerGeneration(t, dataDir, session.ID),
+		conversationID, acpTurnUsage(111, 22, 33), now)
+	seedACPUsageEvent(t, store, rebound, sessionControllerGeneration(t, dataDir, rebound.ID),
+		conversationID, acpTurnUsage(444, 55, 66), now.Add(time.Minute))
+
+	certifier := NewACPCertifier(store, ACPCertifierConfig{Clock: func() time.Time { return now }})
+	certifier.Sync(ctx)
+
+	db := openACPTestDB(t, dataDir)
+	defer func() { _ = db.Close() }()
+	type perSession struct {
+		events int64
+		input  int64
+	}
+	rows, err := db.Query(`
+		SELECT ub.session_id, CAST(COUNT(*) AS INTEGER), CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER)
+		FROM model_usage_events mue
+		JOIN usage_bindings ub ON ub.id = mue.binding_id
+		WHERE ub.session_id IN (?, ?)
+		GROUP BY ub.session_id`, session.ID, rebound.ID)
+	mustNoError(t, err)
+	defer func() { _ = rows.Close() }()
+	bySession := map[domain.SessionID]perSession{}
+	for rows.Next() {
+		var sessionID domain.SessionID
+		var counts perSession
+		mustNoError(t, rows.Scan(&sessionID, &counts.events, &counts.input))
+		bySession[sessionID] = counts
+	}
+	mustNoError(t, rows.Err())
+	if got := bySession[session.ID]; got.events != 1 || got.input != 111+33 {
+		t.Fatalf("original session certified %+v, want exactly its own turn (input %d)", got, 111+33)
+	}
+	if got := bySession[rebound.ID]; got.events != 1 || got.input != 444+66 {
+		t.Fatalf("rebound session certified %+v, want exactly its own turn (input %d)", got, 444+66)
+	}
+
+	// The whole point of the issue: re-scans stay duplicate-free even with
+	// two bindings watching one conversation.
+	certifier.Sync(ctx)
+	if got := countACPUsageEvents(t, dataDir, "1=1"); got != 2 {
+		t.Fatalf("re-scan produced %d events, want 2", got)
+	}
+}
+
+// conversations.model is legitimately NULL (the provider default answered, or
+// an agent switch reset the overrides). The documented "unknown" fallback must
+// keep those events certifiable — valid model id, no attribution, nil cost —
+// instead of wedging the conversation in a permanent retry loop.
+func TestACPCertifierFallsBackToUnknownModelWhenUnset(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0).UTC()
+	dataDir := t.TempDir()
+	store, session := seedUsageTestSession(t, dataDir, "usage", domain.HarnessOpenCode, domain.ActivityIdle, "", now)
+	conversationID := seedACPConversation(t, store, session, "conv-acp-unset-model")
+	clearConversationUsageModel(t, dataDir, conversationID)
+	seedACPUsageEvent(t, store, session, sessionControllerGeneration(t, dataDir, session.ID),
+		conversationID, acpTurnUsage(90, 40, 160), now)
+
+	snapshot := testPricingSnapshot(t, "0.000001")
+	certifier := NewACPCertifier(store, ACPCertifierConfig{
+		Pricing: pricing.NewManager(snapshot),
+		Clock:   func() time.Time { return now },
+	})
+	certifier.Sync(ctx)
+
+	db := openACPTestDB(t, dataDir)
+	defer func() { _ = db.Close() }()
+	var modelID, billingProvider string
+	var cost sql.NullInt64
+	mustNoError(t, db.QueryRow(`
+		SELECT mue.model_id, COALESCE(mue.billing_provider_id, ''), mue.estimated_cost_nanos
+		FROM model_usage_events mue
+		JOIN usage_sources us ON us.id = mue.usage_source_id
+		WHERE us.kind = 'acp_usage'`).Scan(&modelID, &billingProvider, &cost))
+	if modelID != "unknown" {
+		t.Fatalf("unset model certified as %q, want the unknown sentinel", modelID)
+	}
+	if billingProvider != "" || cost.Valid {
+		t.Fatalf("unset model attribution = %q cost valid = %v, want unattributed nil cost", billingProvider, cost.Valid)
+	}
+
+	certifier.Sync(ctx)
+	if got := countACPUsageEvents(t, dataDir, "1=1"); got != 1 {
+		t.Fatalf("re-scan produced %d events, want 1", got)
+	}
+}

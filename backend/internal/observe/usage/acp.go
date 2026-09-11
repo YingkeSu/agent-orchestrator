@@ -50,7 +50,7 @@ type acpCertifierStore interface {
 	GetUsageSourceForIngestion(context.Context, int64) (domain.UsageSourceContext, bool, error)
 	ApplyUsageChunk(context.Context, int64, int64, time.Time, domain.SourceCursorState, []domain.ModelUsageEvent, []domain.UsageEventTiming) error
 	ListACPUsageEventConversations(context.Context) ([]domain.ACPUsageConversationRef, error)
-	ListACPUsageEventsAfter(context.Context, string, int64, int64) ([]domain.ACPUsageEvent, error)
+	ListACPUsageEventsAfter(context.Context, string, domain.SessionID, int64, int64) ([]domain.ACPUsageEvent, error)
 	ConversationUsageModel(context.Context, string) (string, bool, error)
 }
 
@@ -194,6 +194,13 @@ func (c *ACPCertifier) syncConversation(ctx context.Context, ref domain.ACPUsage
 		// the conversation scan was a moment stale.
 		return nil
 	}
+	// conversations.model is legitimately NULL: it means the provider default
+	// answered and nothing durable names which model that was. Certify under
+	// the same "unknown" sentinel the transcript parsers use — the event stays
+	// valid, and no catalog lists the sentinel, so attribution and cost stay
+	// nil instead of inventing a model or wedging this conversation in a
+	// permanent retry loop.
+	modelID = firstNonEmpty(modelID, "unknown")
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -203,7 +210,7 @@ func (c *ACPCertifier) syncConversation(ctx context.Context, ref domain.ACPUsage
 			return err
 		}
 		source = sourceCtx.Source
-		archive, err := c.store.ListACPUsageEventsAfter(ctx, ref.ConversationID, sourceCtx.Source.ByteOffset, acpChunkEvents)
+		archive, err := c.store.ListACPUsageEventsAfter(ctx, ref.ConversationID, ref.SessionID, sourceCtx.Source.ByteOffset, acpChunkEvents)
 		if err != nil {
 			return err
 		}

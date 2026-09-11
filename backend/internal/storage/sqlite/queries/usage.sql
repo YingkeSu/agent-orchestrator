@@ -1121,9 +1121,14 @@ ORDER BY cpe.conversation_id;
 
 -- name: ListACPUsageEventsAfter :many
 -- One bounded, id-ordered page of the conversation's archived usage events
--- past the certifier cursor. The row id is the replay identity: it keys the
--- emitted model_usage_events.source_event_key, so a re-scan deduplicates
--- through the events table's UNIQUE(binding_id, source_event_key).
+-- past the certifier cursor, scoped to the session that archived them. The
+-- session predicate keeps binding identity and event identity aligned: a
+-- binding is (session_id, harness, native_root_id), so rows archived under
+-- a different session of the same rebound conversation must never reach
+-- this binding's cursor, or they would re-derive fresh acp:<row_id> keys
+-- under its binding_id and double-count. The row id is the replay
+-- identity: it keys the emitted model_usage_events.source_event_key, so a
+-- re-scan deduplicates through UNIQUE(binding_id, source_event_key).
 SELECT
     id,
     session_id,
@@ -1131,6 +1136,7 @@ SELECT
     received_at
 FROM conversation_provider_events
 WHERE conversation_id = sqlc.arg(conversation_id)
+  AND session_id = sqlc.arg(archived_by_session)
   AND method = 'usage'
   AND id > sqlc.arg(after_id)
 ORDER BY id

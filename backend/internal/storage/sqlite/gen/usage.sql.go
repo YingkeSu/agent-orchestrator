@@ -1388,16 +1388,18 @@ SELECT
     received_at
 FROM conversation_provider_events
 WHERE conversation_id = ?1
+  AND session_id = ?2
   AND method = 'usage'
-  AND id > ?2
+  AND id > ?3
 ORDER BY id
-LIMIT ?3
+LIMIT ?4
 `
 
 type ListACPUsageEventsAfterParams struct {
-	ConversationID string
-	AfterID        int64
-	Limit          int64
+	ConversationID    string
+	ArchivedBySession domain.SessionID
+	AfterID           int64
+	Limit             int64
 }
 
 type ListACPUsageEventsAfterRow struct {
@@ -1408,11 +1410,21 @@ type ListACPUsageEventsAfterRow struct {
 }
 
 // One bounded, id-ordered page of the conversation's archived usage events
-// past the certifier cursor. The row id is the replay identity: it keys the
-// emitted model_usage_events.source_event_key, so a re-scan deduplicates
-// through the events table's UNIQUE(binding_id, source_event_key).
+// past the certifier cursor, scoped to the session that archived them. The
+// session predicate keeps binding identity and event identity aligned: a
+// binding is (session_id, harness, native_root_id), so rows archived under
+// a different session of the same rebound conversation must never reach
+// this binding's cursor, or they would re-derive fresh acp:<row_id> keys
+// under its binding_id and double-count. The row id is the replay
+// identity: it keys the emitted model_usage_events.source_event_key, so a
+// re-scan deduplicates through UNIQUE(binding_id, source_event_key).
 func (q *Queries) ListACPUsageEventsAfter(ctx context.Context, arg ListACPUsageEventsAfterParams) ([]ListACPUsageEventsAfterRow, error) {
-	rows, err := q.db.QueryContext(ctx, listACPUsageEventsAfter, arg.ConversationID, arg.AfterID, arg.Limit)
+	rows, err := q.db.QueryContext(ctx, listACPUsageEventsAfter,
+		arg.ConversationID,
+		arg.ArchivedBySession,
+		arg.AfterID,
+		arg.Limit,
+	)
 	if err != nil {
 		return nil, err
 	}

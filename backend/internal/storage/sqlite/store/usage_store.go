@@ -1220,15 +1220,17 @@ func (s *Store) ListACPUsageEventConversations(ctx context.Context) ([]domain.AC
 }
 
 // ListACPUsageEventsAfter returns one bounded, id-ordered page of the
-// conversation's archived usage events past the given row id.
-func (s *Store) ListACPUsageEventsAfter(ctx context.Context, conversationID string, afterID, limit int64) ([]domain.ACPUsageEvent, error) {
+// conversation's archived usage events past the given row id, scoped to the
+// session that archived them.
+func (s *Store) ListACPUsageEventsAfter(ctx context.Context, conversationID string, sessionID domain.SessionID, afterID, limit int64) ([]domain.ACPUsageEvent, error) {
 	rows, err := s.qr.ListACPUsageEventsAfter(ctx, gen.ListACPUsageEventsAfterParams{
-		ConversationID: conversationID,
-		AfterID:        afterID,
-		Limit:          limit,
+		ConversationID:    conversationID,
+		ArchivedBySession: sessionID,
+		AfterID:           afterID,
+		Limit:             limit,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list ACP usage events for conversation %s after %d: %w", conversationID, afterID, err)
+		return nil, fmt.Errorf("list ACP usage events for conversation %s session %s after %d: %w", conversationID, sessionID, afterID, err)
 	}
 	out := make([]domain.ACPUsageEvent, 0, len(rows))
 	for _, row := range rows {
