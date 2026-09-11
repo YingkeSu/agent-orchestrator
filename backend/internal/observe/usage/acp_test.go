@@ -520,3 +520,19 @@ func TestACPCertifierFallsBackToUnknownModelWhenUnset(t *testing.T) {
 		t.Fatalf("re-scan produced %d events, want 1", got)
 	}
 }
+
+func TestACPCertifierDoesNotDoubleCountTranscriptHarnesses(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessKimi} {
+		t.Run(string(harness), func(t *testing.T) {
+			now := time.Unix(1700000000, 0).UTC()
+			dataDir := t.TempDir()
+			store, session := seedUsageTestSession(t, dataDir, "usage", harness, domain.ActivityIdle, "", now)
+			conversationID := seedACPConversation(t, store, session, "already-certified")
+			seedACPUsageEvent(t, store, session, sessionControllerGeneration(t, dataDir, session.ID), conversationID, acpTurnUsage(100, 50, 900), now)
+			NewACPCertifier(store, ACPCertifierConfig{}).Sync(context.Background())
+			if got := countACPUsageEvents(t, dataDir, "1=1"); got != 0 {
+				t.Fatalf("transcript harness %s was certified twice: %d ACP events", harness, got)
+			}
+		})
+	}
+}

@@ -137,6 +137,7 @@ var shippedMigrations = map[int64]string{
 	130: "0130_usage_event_timing.sql",
 	131: "0131_usage_cache_creation_split.sql",
 	132: "0132_usage_acp_source.sql",
+	133: "0133_reconcile_acp_usage_schema.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
