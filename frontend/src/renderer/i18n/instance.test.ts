@@ -159,6 +159,14 @@ describe("app i18next instance", () => {
 		}
 	});
 
+	it("carries no dead runtime loading key in any locale", () => {
+		for (const locale of APP_LOCALES) {
+			expect("inspector.runtime.loading" in allCatalogs[locale], `${locale} still has inspector.runtime.loading`).toBe(
+				false,
+			);
+		}
+	});
+
 	it("keeps interpolation variables aligned between locales", () => {
 		const variables = (message: string | string[]) => {
 			const msgs = Array.isArray(message) ? message : [message];

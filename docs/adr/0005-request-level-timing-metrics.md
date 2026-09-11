@@ -290,7 +290,10 @@ time.
   creates the assistant row when streaming content arrives rather than at final
   completion; the implementing slice must confirm that stamping and, if needed,
   make the minimal change so the durable row records first-content arrival.
-  Until that is confirmed, chat first-token stays NULL.
+  The driver inserts the assistant row at the first streaming delta. A whole-row
+  `SettleAssistantMessage` reconnect fallback is stamped at settlement instead;
+  without a streaming marker or revision, it cannot certify first-content time,
+  so its first-token metric stays NULL.
 - **Native/TUI mode:** **derivable, not NULL.** The certified transcripts
   record both a user/prompt record timestamp and the first assistant response
   record timestamp, so first-token is derived per source from those two
