@@ -171,6 +171,12 @@ func (c *ACPCertifier) syncConversation(ctx context.Context, ref domain.ACPUsage
 	if err != nil || !ok {
 		return err
 	}
+	// These harnesses already have certified transcript sources. Codex also
+	// emits cumulative counters, which cannot be summed as ACP per-turn facts.
+	switch session.Harness {
+	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessKimi:
+		return nil
+	}
 	now := c.now().UTC()
 	binding, err := c.ensureBinding(ctx, session, ref.ConversationID, now)
 	if err != nil {
