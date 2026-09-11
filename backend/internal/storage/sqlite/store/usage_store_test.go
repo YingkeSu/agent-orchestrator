@@ -2694,7 +2694,7 @@ func TestApplyUsageChunkPersistsCacheCreationBucket(t *testing.T) {
 	assertUsageSourceOffset(t, s, source.ID, 10)
 }
 
-// A pre-0131 row's NULL bucket fills from the replay without duplicating the
+// A pre-0138 row's NULL bucket fills from the replay without duplicating the
 // event; once captured, a different bucket replays as a conflict (ADR 0006
 // Decision 1: the bucket joins the replay comparison).
 func TestApplyUsageChunkReplayFillsThenGuardsCacheCreation(t *testing.T) {

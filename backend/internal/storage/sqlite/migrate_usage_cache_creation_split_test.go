@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// The 0131 column pins both the non-negative floor and the additive
+// The 0138 column pins both the non-negative floor and the additive
 // cache_creation <= uncached_input invariant in SQL (ADR 0006 sketch open
 // question 1: verified accepted and enforced under ADD COLUMN on the bundled
 // driver). This keeps the pin honest: a violating write must fail at the

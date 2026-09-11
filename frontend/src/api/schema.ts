@@ -946,6 +946,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/clone/cleanup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove an abandoned clone created for project preparation */
+        post: operations["cleanupPreparedClone"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/clone/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clone a project without registering it so Git setup can be completed */
+        post: operations["prepareCloneProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/initialize": {
         parameters: {
             query?: never;
@@ -2479,6 +2513,7 @@ export interface components {
         };
         AddProjectInput: {
             asWorkspace?: boolean;
+            clonePreparationId?: string;
             config?: components["schemas"]["ProjectConfig"];
             name?: null | string;
             path: string;
@@ -2683,6 +2718,11 @@ export interface components {
         CleanupSkippedSession: {
             reason: string;
             sessionId: string;
+        };
+        ClonePreparationResult: {
+            path: string;
+            preparationId: string;
+            remoteUrl: string;
         };
         CloneProjectInput: {
             config?: components["schemas"]["ProjectConfig"];
@@ -2918,6 +2958,7 @@ export interface components {
             autoInjectReview: boolean;
             autoReviewEnabled: boolean;
             branch?: string;
+            chatProviderPreserved: boolean;
             /** Format: date-time */
             createdAt: string;
             displayName?: string;
@@ -2945,7 +2986,7 @@ export interface components {
             prs: components["schemas"]["SessionPRFacts"][];
             reviewerConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
-            reviewerHarness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "qwen" | "agy" | "continue" | "goose" | "vibe" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+            reviewerHarness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
             /** @enum {string} */
             scmStatus?: "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "approved" | "mergeable" | "merged";
             /** @enum {string} */
@@ -3373,9 +3414,14 @@ export interface components {
              */
             total: number;
         };
+        GitHubRepositoryPreparation: {
+            name?: string;
+            owner?: string;
+            private?: null | boolean;
+        };
         GitPreparationEvent: {
             /** @enum {string} */
-            action: "git_init" | "git_commit" | "set_remote";
+            action: "git_init" | "git_commit" | "create_remote_repository" | "set_remote";
             error?: string;
             message?: string;
             repoPath: string;
@@ -3384,12 +3430,14 @@ export interface components {
         };
         GitPreparationInput: {
             approvedActions?: string[];
+            githubRepository?: components["schemas"]["GitHubRepositoryPreparation"];
             /** @enum {string} */
             importKind: "project" | "workspace";
             initialCommitMessage?: string;
             path: string;
             remoteUrl?: string;
             repositories?: components["schemas"]["GitRepositoryPreparationInput"][];
+            stepwise?: boolean;
         };
         GitPreparationResult: {
             events: components["schemas"]["GitPreparationEvent"][];
@@ -3397,6 +3445,7 @@ export interface components {
         };
         GitRepositoryPreparationInput: {
             approvedActions: string[];
+            githubRepository?: components["schemas"]["GitHubRepositoryPreparation"];
             initialCommitMessage?: string;
             remoteUrl?: string;
             repoPath: string;
@@ -3508,6 +3557,8 @@ export interface components {
             projects: components["schemas"]["ProjectSummary"][];
         };
         ListReviewsResponse: {
+            /** @enum {string} */
+            reviewerActivityState?: "active" | "idle" | "waiting_input" | "blocked" | "exited";
             reviewerHandleId: string;
             reviewerHarness?: string;
             reviews: components["schemas"]["PRReviewState"][];
@@ -3714,6 +3765,10 @@ export interface components {
             path: string;
             repo: string;
             workspaceRepos?: components["schemas"]["WorkspaceRepo"][];
+        };
+        ProjectClonePreparationCleanupInput: {
+            path: string;
+            preparationId: string;
         };
         ProjectConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
@@ -4008,6 +4063,7 @@ export interface components {
             resolvedBy?: components["schemas"]["SessionPRUnresolvedReviewer"][];
             reviews?: components["schemas"]["SessionPRReviewEntry"][];
             unresolvedBy: components["schemas"]["SessionPRUnresolvedReviewer"][];
+            unresolvedThreadCount?: null | number;
         };
         SessionPRSummary: {
             additions: number;
@@ -4139,7 +4195,7 @@ export interface components {
             /** @description AO process generation that produced the signal. */
             launchId?: string;
             /**
-             * @description Reviewer activity state reported by a hook. Accepted for forward compatibility, not used for session display state.
+             * @description Reviewer activity state reported by a hook. Used for reviewer-pane live status, not worker session state.
              * @enum {string}
              */
             state?: "active" | "idle" | "waiting_input" | "blocked" | "exited";
@@ -4182,7 +4238,7 @@ export interface components {
         SetSessionReviewerRequest: {
             agentConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "qwen" | "agy" | "continue" | "goose" | "vibe" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
         };
         SettingsResponse: {
             chatHarnesses: string[];
@@ -4360,7 +4416,7 @@ export interface components {
         TriggerReviewRequest: {
             agentConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "qwen" | "agy" | "continue" | "goose" | "vibe" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
         };
         TriggerReviewResponse: {
             /** @description True when a new review pass was started; false when an existing run for the same commit was reused. */
@@ -7503,6 +7559,97 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    cleanupPreparedClone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectClonePreparationCleanupInput"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    prepareCloneProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloneProjectInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClonePreparationResult"];
                 };
             };
             /** @description Bad Request */

@@ -32,7 +32,7 @@ func TestMigrateRepairsRenumberedCodexProfileHistory(t *testing.T) {
 	}
 
 	assertAppliedMigrations(t, db, 117, 118, 119, 120, 121, 122)
-	// 0117's kimi enum was 0131's rebuild of the relaxed harness CHECK, so the
+	// 0117's kimi enum was 0139's rebuild of the relaxed harness CHECK, so the
 	// observable canonical effect on usage_bindings is the widened CHECK; the
 	// kimi_wire source kind still carries 0117's usage_sources effect.
 	assertTableSQLContains(t, db, "usage_bindings", "length(trim(harness)) > 0")

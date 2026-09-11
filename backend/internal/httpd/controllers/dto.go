@@ -475,7 +475,7 @@ type RenameSessionRequest struct {
 // SetSessionReviewerRequest sets the durable reviewer preference for a session.
 // Empty clears the preference and falls back to project configuration.
 type SetSessionReviewerRequest struct {
-	Harness     domain.ReviewerHarness `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,kiro,pi,qwen,agy,continue,goose,vibe,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
+	Harness     domain.ReviewerHarness `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
 	AgentConfig domain.AgentConfig     `json:"agentConfig,omitempty"`
 }
 
@@ -833,6 +833,7 @@ type SessionPRFailingCheck struct {
 type SessionPRReviewSummary struct {
 	Decision                   domain.ReviewDecision         `json:"decision" enum:"none,approved,changes_requested,review_required"`
 	HasUnresolvedHumanComments bool                          `json:"hasUnresolvedHumanComments"`
+	UnresolvedThreadCount      *int                          `json:"unresolvedThreadCount,omitempty"`
 	UnresolvedBy               []SessionPRUnresolvedReviewer `json:"unresolvedBy"`
 	ResolvedBy                 []SessionPRUnresolvedReviewer `json:"resolvedBy,omitempty"`
 	Reviews                    []SessionPRReviewEntry        `json:"reviews,omitempty"`
@@ -949,7 +950,14 @@ func newSessionPRReviewSummary(in sessionsvc.PRReviewSummary) SessionPRReviewSum
 			AutoInjectReview: review.AutoInjectReview,
 		})
 	}
-	return SessionPRReviewSummary{Decision: in.Decision, HasUnresolvedHumanComments: in.HasUnresolvedHumanComments, UnresolvedBy: reviewers, ResolvedBy: resolvedReviewers, Reviews: entries}
+	return SessionPRReviewSummary{
+		Decision:                   in.Decision,
+		HasUnresolvedHumanComments: in.HasUnresolvedHumanComments,
+		UnresolvedThreadCount:      in.UnresolvedThreadCount,
+		UnresolvedBy:               reviewers,
+		ResolvedBy:                 resolvedReviewers,
+		Reviews:                    entries,
+	}
 }
 
 func newSessionPRCommentReviewers(in []sessionsvc.PRUnresolvedReviewer) []SessionPRUnresolvedReviewer {
@@ -1028,11 +1036,11 @@ type SetActivityResponse struct {
 }
 
 // SetReviewActivityRequest is the body of POST /api/v1/reviews/{reviewSessionID}/activity.
-// Reviewer activity does not currently feed worker/Kanban session state.
 // AgentSessionID is the native reviewer conversation id used for reviewer
-// restore.
+// restore. State is used for reviewer-pane live review presentation only; it
+// does not mutate the worker session lifecycle row.
 type SetReviewActivityRequest struct {
-	State          string `json:"state,omitempty" enum:"active,idle,waiting_input,blocked,exited" description:"Reviewer activity state reported by a hook. Accepted for forward compatibility, not used for session display state."`
+	State          string `json:"state,omitempty" enum:"active,idle,waiting_input,blocked,exited" description:"Reviewer activity state reported by a hook. Used for reviewer-pane live status, not worker session state."`
 	Event          string `json:"event,omitempty" description:"AO hook sub-command that produced this signal."`
 	AgentSessionID string `json:"agentSessionId,omitempty" description:"Native reviewer session identifier used to resume its transcript."`
 	LaunchID       string `json:"launchId,omitempty" description:"AO process generation that produced the signal."`
@@ -2585,7 +2593,7 @@ func capabilityNames(caps ports.ChatCapabilities) []string {
 // it for this pass only, without editing project config, so one session's choice
 // cannot change what another session in the project runs.
 type TriggerReviewRequest struct {
-	Harness     domain.ReviewerHarness `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,kiro,pi,qwen,agy,continue,goose,vibe,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
+	Harness     domain.ReviewerHarness `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
 	AgentConfig domain.AgentConfig     `json:"agentConfig,omitempty"`
 }
 
