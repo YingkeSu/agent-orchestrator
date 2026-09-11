@@ -467,7 +467,7 @@ func (s *Store) ApplyUsageChunk(
 					}
 					insertedEvent = true
 				}
-				// A pre-0131 row's NULL write bucket fills from the replay, the
+				// A pre-0138 row's NULL write bucket fills from the replay, the
 				// same one-way enrichment the provider object below gets.
 				if ev.Tokens.CacheCreationInputTokens != nil {
 					rows, err := q.EnrichModelUsageEventCacheCreation(ctx, gen.EnrichModelUsageEventCacheCreationParams{
@@ -1265,7 +1265,7 @@ func usageEventReplayDisposition(existing gen.GetModelUsageEventByKeyRow, event 
 		existing.CachedInputTokens == ptrInt64ToNull(event.Tokens.CachedInputTokens) &&
 		existing.UncachedInputTokens == ptrInt64ToNull(event.Tokens.UncachedInputTokens) &&
 		existing.OutputTokens == ptrInt64ToNull(event.Tokens.OutputTokens)
-	// A stored NULL cache-creation bucket predates migration 0131, so a replay
+	// A stored NULL cache-creation bucket predates migration 0138, so a replay
 	// carrying the bucket enriches the row instead of conflicting with it; a
 	// captured bucket is compared like any other counter.
 	cacheCreationMatches := !existing.CacheCreationInputTokens.Valid ||

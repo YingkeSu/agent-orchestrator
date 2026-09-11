@@ -105,7 +105,7 @@ The write bucket is a token fact of the event itself, in the same category as
 `uncached_input_tokens`: provider-reported (or derived by the same certified
 arithmetic), write-once, and part of what makes one event this event. It is
 stored as one more nullable counter on `model_usage_events`, added by a new
-append migration (`0131_usage_cache_creation_split.sql`, sketch in the Storage
+append migration (`0138_usage_cache_creation_split.sql`, sketch in the Storage
 sketch summary below). The folded totals and the existing table-level CHECK
 (`input_tokens = cached_input_tokens + uncached_input_tokens`) are untouched;
 the 0115 rebuild's shape is preserved and the change is a strict superset.
@@ -418,7 +418,7 @@ no existing member's name, shape, or semantics. Concretely:
 
 ## Storage sketch summary
 
-One append migration, `0131_usage_cache_creation_split.sql` (column names
+One append migration, `0138_usage_cache_creation_split.sql` (column names
 indicative; the slice owns the exact migration and `npm run sqlc`
 regeneration):
 
@@ -464,7 +464,7 @@ CAST(COUNT(mue.cache_creation_input_tokens) AS INTEGER)
 
 The approved slice ("surface the cache-creation split") is:
 
-1. **Migration + storage.** `0131` append migration as sketched, sqlc query
+1. **Migration + storage.** `0138` append migration as sketched, sqlc query
    and store regeneration (`npm run sqlc`), aggregate `SUM`/`COUNT` pairs and
    the coverage gate; resolve the cross-column CHECK open item and pin the
    decision in the migration comment.

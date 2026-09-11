@@ -34,7 +34,7 @@ var expectedUsageTableColumns = map[string][]string{
 		// second full rebuild to move it beside billing_provider_id would cost
 		// more than the adjacency is worth.
 		"billing_provider_source",
-		// 0131 appends: the nullable cache-creation (cache write) bucket.
+		// 0138 appends: the nullable cache-creation (cache write) bucket.
 		"cache_creation_input_tokens",
 	},
 }

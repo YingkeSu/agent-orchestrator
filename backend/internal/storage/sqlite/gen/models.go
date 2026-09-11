@@ -234,6 +234,7 @@ type Conversation struct {
 	UsageCost                  sql.NullFloat64
 	UsageCurrency              sql.NullString
 	ActiveBranchID             string
+	OpencodeMode               string
 }
 
 type ConversationActivity struct {
@@ -413,6 +414,7 @@ type PR struct {
 	AutoInjectCI             bool
 	ProviderID               string
 	AuthorAvatarURL          string
+	ReviewPartial            bool
 }
 
 type PRCheck struct {
@@ -484,15 +486,17 @@ type Project struct {
 }
 
 type Review struct {
-	ID               string
-	SessionID        domain.SessionID
-	ProjectID        domain.ProjectID
-	Harness          domain.ReviewerHarness
-	PRURL            string
-	ReviewerHandleID string
-	AgentSessionID   string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID                    string
+	SessionID             domain.SessionID
+	ProjectID             domain.ProjectID
+	Harness               domain.ReviewerHarness
+	PRURL                 string
+	ReviewerHandleID      string
+	AgentSessionID        string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	ReviewerActivityState string
+	ReviewerLaunchID      string
 }
 
 type ReviewRun struct {
@@ -615,6 +619,7 @@ type ShellTerminal struct {
 	AppRunID   string
 	CreatedAt  time.Time
 	SessionID  sql.NullString
+	Transient  bool
 }
 
 type TelemetryEvent struct {

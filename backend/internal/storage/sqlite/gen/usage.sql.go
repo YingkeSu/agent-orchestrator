@@ -849,7 +849,7 @@ type EnrichModelUsageEventCacheCreationParams struct {
 }
 
 // Replaying a durable prefix can supply the cache-write bucket for an event
-// stored before migration 0131 existed, exactly like the bounded provider
+// stored before migration 0138 existed, exactly like the bounded provider
 // object above. A captured bucket is never overwritten: the column fills once,
 // then the write-once event contract holds.
 func (q *Queries) EnrichModelUsageEventCacheCreation(ctx context.Context, arg EnrichModelUsageEventCacheCreationParams) (int64, error) {

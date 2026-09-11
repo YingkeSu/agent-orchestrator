@@ -742,6 +742,16 @@ func (s *Store) ConversationForSession(
 	return conversationToDomain(row), nil
 }
 
+// HasConversationTurns includes hidden and settled turns: an empty visible
+// timeline is not proof that the provider conversation never started.
+func (s *Store) HasConversationTurns(ctx context.Context, conversationID string) (bool, error) {
+	hasTurns, err := s.qr.HasConversationTurns(ctx, conversationID)
+	if err != nil {
+		return false, fmt.Errorf("check conversation turns %s: %w", conversationID, err)
+	}
+	return hasTurns, nil
+}
+
 // AppendUserMessage records an inbound message and the turn it opens.
 //
 // Idempotent on clientMessageID: a retried send returns the message and turn that
@@ -1242,6 +1252,7 @@ func (s *Store) SetConversationSettings(
 		Model:           nullableString(settings.Model),
 		ReasoningEffort: nullableString(settings.ReasoningEffort),
 		ApprovalMode:    nullableString(string(settings.ApprovalMode)),
+		OpencodeMode:    settings.OpenCodeMode,
 		UpdatedAt:       now,
 		ID:              conversationID,
 	}); err != nil {
@@ -2922,6 +2933,7 @@ func conversationToDomain(row gen.Conversation) domain.ConversationRecord {
 			Model:           row.Model.String,
 			ReasoningEffort: row.ReasoningEffort.String,
 			ApprovalMode:    domain.PermissionMode(row.ApprovalMode.String),
+			OpenCodeMode:    row.OpencodeMode,
 		},
 		ProviderTitle: row.ProviderTitle,
 		AppliedTitle:  row.AppliedTitle,
