@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -741,20 +740,6 @@ func (s *Store) ConversationForSession(
 		return domain.ConversationRecord{}, fmt.Errorf("select conversation for %s: %w", session, err)
 	}
 	return conversationToDomain(row), nil
-}
-
-// ConversationModel returns the model a conversation is currently attributed
-// to, and whether the conversation row exists at all. An empty model means the
-// interface never recorded one for this conversation.
-func (s *Store) ConversationModel(ctx context.Context, conversationID string) (string, bool, error) {
-	row, err := s.qr.SelectConversationByID(ctx, conversationID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("select conversation %s: %w", conversationID, err)
-	}
-	return strings.TrimSpace(row.Model.String), true, nil
 }
 
 // AppendUserMessage records an inbound message and the turn it opens.

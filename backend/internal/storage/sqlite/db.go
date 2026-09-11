@@ -1118,11 +1118,18 @@ SELECT COALESCE((
 		return nil
 	}
 
+	// 0132 widened the canonical usage shapes: usage_bindings no longer
+	// enumerates harnesses (its CHECK accepts every non-empty value) and
+	// usage_sources gained acp_usage. Either kimi-bearing shape counts as the
+	// canonical effect, so a database upgraded past 0132 is not mistaken for
+	// a pre-Kimi dev build whose 117 ledger entry must be replayed.
+	// Migration 0131 is the cache-creation split and touches neither table.
 	var kimiUsageShape int
 	if err := db.QueryRow(`
 SELECT (SELECT COUNT(*) FROM sqlite_master
         WHERE type = 'table' AND name = 'usage_bindings'
-          AND instr(COALESCE(sql, ''), '''kimi''') > 0)
+          AND (instr(COALESCE(sql, ''), '''kimi''') > 0
+               OR instr(COALESCE(sql, ''), 'length(trim(harness)) > 0') > 0))
      + (SELECT COUNT(*) FROM sqlite_master
         WHERE type = 'table' AND name = 'usage_sources'
           AND instr(COALESCE(sql, ''), '''kimi_wire''') > 0)`).Scan(&kimiUsageShape); err != nil {

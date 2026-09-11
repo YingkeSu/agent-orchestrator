@@ -3,18 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
 import { UsageTrendChart } from "./UsageTrendChart";
 
+type TrendBucket = components["schemas"]["UsageTrendBucketResponse"];
+
 // jsdom gives ResponsiveContainer a zero-size box, in which recharts mounts
 // nothing. Rendering the chart body at an explicit size keeps the legend
 // assertable.
 vi.mock("recharts", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("recharts")>();
 	const { cloneElement } = await import("react");
-	const ResponsiveContainer = ({ children }: { children: React.ReactElement<{ width?: number; height?: number }> }) =>
+	type SizedChart = React.ReactElement<{ width?: number; height?: number }>;
+	const ResponsiveContainer = ({ children }: { children: SizedChart }) =>
 		cloneElement(children, { width: 600, height: 256 });
 	return { ...actual, ResponsiveContainer };
 });
-
-type TrendBucket = components["schemas"]["UsageTrendBucketResponse"];
 
 function bucket(overrides: Partial<TrendBucket>): TrendBucket {
 	return {
@@ -47,7 +48,7 @@ describe("UsageTrendChart", () => {
 		expect(legend?.textContent).toContain("New input");
 	});
 
-	it("keeps the cache-creation legend when its bucket is unknown", () => {
+	it("shows the unknown marker for a nil cache-creation bucket, never 0", () => {
 		render(
 			<UsageTrendChart
 				buckets={[bucket({ cacheCreationInputTokens: null })]}
@@ -56,7 +57,9 @@ describe("UsageTrendChart", () => {
 		);
 		const chart = screen.getByRole("img", { name: /usage trend/i });
 		expect(chart).toBeDefined();
-		// Missing measurements must not remove the series from the legend.
+		// A nil bucket renders as a gap: the series exists in the legend but no
+		// zero line is drawn for it. The tooltip-level unknown copy is verified
+		// by the shared "Unavailable" string the chart uses for null values.
 		const legend = chart.querySelector(".recharts-legend-wrapper");
 		expect(legend?.textContent).toContain("Cache creation");
 	});

@@ -1335,51 +1335,105 @@ func (q *Queries) InsertUsageSource(ctx context.Context, arg InsertUsageSourcePa
 	return i, err
 }
 
-const listACPUsageProviderEvents = `-- name: ListACPUsageProviderEvents :many
+const listACPUsageEventConversations = `-- name: ListACPUsageEventConversations :many
 SELECT
-    conversation_provider_events.id AS event_row_id,
-    conversation_id,
-    session_id,
-    payload_json,
-    received_at
-FROM conversation_provider_events
-WHERE conversation_id = ?
-  AND method = 'usage'
-  AND conversation_provider_events.id > ?
-ORDER BY conversation_provider_events.id
-LIMIT ?
+    cpe.conversation_id,
+    cpe.session_id,
+    CAST(MAX(cpe.id) AS INTEGER) AS last_event_id
+FROM conversation_provider_events cpe
+WHERE cpe.method = 'usage'
+GROUP BY cpe.conversation_id, cpe.session_id
+ORDER BY cpe.conversation_id
 `
 
-type ListACPUsageProviderEventsParams struct {
-	ConversationID string
-	ID             int64
-	Limit          int64
-}
-
-type ListACPUsageProviderEventsRow struct {
-	EventRowID     int64
+type ListACPUsageEventConversationsRow struct {
 	ConversationID string
 	SessionID      domain.SessionID
-	PayloadJson    string
-	ReceivedAt     time.Time
+	LastEventID    int64
 }
 
-// Bounded scan of one conversation's archived ACP usage reports, oldest first.
-// The autoincrement id is the insertion-order cursor; provider_event_id is
-// empty for these events, so the row identity itself is the stable dedupe
-// ingredient.
-func (q *Queries) ListACPUsageProviderEvents(ctx context.Context, arg ListACPUsageProviderEventsParams) ([]ListACPUsageProviderEventsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listACPUsageProviderEvents, arg.ConversationID, arg.ID, arg.Limit)
+// Conversations whose durable provider-event archive carries usage facts, with
+// the newest usage row id. The ACP certifier compares last_event_id against
+// each conversation's acp_usage source cursor to find work; the scan is the
+// backfill entry point as well as the live poll, because the archive is
+// durable AO state rather than a rotated transcript.
+func (q *Queries) ListACPUsageEventConversations(ctx context.Context) ([]ListACPUsageEventConversationsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listACPUsageEventConversations)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListACPUsageProviderEventsRow{}
+	items := []ListACPUsageEventConversationsRow{}
 	for rows.Next() {
-		var i ListACPUsageProviderEventsRow
+		var i ListACPUsageEventConversationsRow
+		if err := rows.Scan(&i.ConversationID, &i.SessionID, &i.LastEventID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listACPUsageEventsAfter = `-- name: ListACPUsageEventsAfter :many
+SELECT
+    id,
+    session_id,
+    payload_json,
+    received_at
+FROM conversation_provider_events
+WHERE conversation_id = ?1
+  AND session_id = ?2
+  AND method = 'usage'
+  AND id > ?3
+ORDER BY id
+LIMIT ?4
+`
+
+type ListACPUsageEventsAfterParams struct {
+	ConversationID    string
+	ArchivedBySession domain.SessionID
+	AfterID           int64
+	Limit             int64
+}
+
+type ListACPUsageEventsAfterRow struct {
+	ID          int64
+	SessionID   domain.SessionID
+	PayloadJson string
+	ReceivedAt  time.Time
+}
+
+// One bounded, id-ordered page of the conversation's archived usage events
+// past the certifier cursor, scoped to the session that archived them. The
+// session predicate keeps binding identity and event identity aligned: a
+// binding is (session_id, harness, native_root_id), so rows archived under
+// a different session of the same rebound conversation must never reach
+// this binding's cursor, or they would re-derive fresh acp:<row_id> keys
+// under its binding_id and double-count. The row id is the replay
+// identity: it keys the emitted model_usage_events.source_event_key, so a
+// re-scan deduplicates through UNIQUE(binding_id, source_event_key).
+func (q *Queries) ListACPUsageEventsAfter(ctx context.Context, arg ListACPUsageEventsAfterParams) ([]ListACPUsageEventsAfterRow, error) {
+	rows, err := q.db.QueryContext(ctx, listACPUsageEventsAfter,
+		arg.ConversationID,
+		arg.ArchivedBySession,
+		arg.AfterID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListACPUsageEventsAfterRow{}
+	for rows.Next() {
+		var i ListACPUsageEventsAfterRow
 		if err := rows.Scan(
-			&i.EventRowID,
-			&i.ConversationID,
+			&i.ID,
 			&i.SessionID,
 			&i.PayloadJson,
 			&i.ReceivedAt,
@@ -1672,48 +1726,6 @@ func (q *Queries) ListConversationRuntimeTurnFacts(ctx context.Context, sessionI
 			&i.StartedAt,
 			&i.CompletedAt,
 		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listConversationsWithACPUsage = `-- name: ListConversationsWithACPUsage :many
-SELECT DISTINCT
-    events.conversation_id AS conversation_id,
-    events.session_id AS session_id
-FROM conversation_provider_events events
-JOIN sessions s ON s.id = events.session_id
-WHERE events.method = 'usage'
-  AND s.harness = 'opencode'
-`
-
-type ListConversationsWithACPUsageRow struct {
-	ConversationID string
-	SessionID      domain.SessionID
-}
-
-// Every conversation that has archived ACP usage reports for a session whose
-// harness has no certified transcript source. Backfill rescans these from the
-// durable source cursor; already-certified prefixes are skipped per
-// conversation by the certifier.
-func (q *Queries) ListConversationsWithACPUsage(ctx context.Context) ([]ListConversationsWithACPUsageRow, error) {
-	rows, err := q.db.QueryContext(ctx, listConversationsWithACPUsage)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListConversationsWithACPUsageRow{}
-	for rows.Next() {
-		var i ListConversationsWithACPUsageRow
-		if err := rows.Scan(&i.ConversationID, &i.SessionID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2470,8 +2482,8 @@ WHERE us.kind <> 'acp_usage'
 ORDER BY us.artifact_path, us.generation, us.id
 `
 
-// acp_usage sources are durable AO state with no file behind them; the
-// transcript watcher and file ingestor must never pick them up.
+// acp_usage sources are table-backed, not transcript files: the file watcher
+// would only fail to open their artifact path. The ACP certifier owns them.
 func (q *Queries) ListWatchableUsageSources(ctx context.Context) ([]UsageSource, error) {
 	rows, err := q.db.QueryContext(ctx, listWatchableUsageSources)
 	if err != nil {
@@ -2600,6 +2612,20 @@ func (q *Queries) RehomeOpenUsageEventToReplacementSource(ctx context.Context, a
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const selectConversationUsageModel = `-- name: SelectConversationUsageModel :one
+SELECT model FROM conversations WHERE id = ?
+`
+
+// The conversation's durable model choice (conversations.model; NULL when the
+// user never picked one and the provider default answered). The ACP usage
+// payload names no model, so this row is the attribution evidence.
+func (q *Queries) SelectConversationUsageModel(ctx context.Context, id string) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, selectConversationUsageModel, id)
+	var model sql.NullString
+	err := row.Scan(&model)
+	return model, err
 }
 
 const touchUsageBinding = `-- name: TouchUsageBinding :exec

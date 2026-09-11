@@ -628,6 +628,14 @@ func Run() error {
 			ReconcilePath: usageCollector.ReconcilePath,
 		})
 		lcStack.LCM.SetUsageFinalizer(usageCollector)
+		// Backfills the durable provider-event archive at startup and keeps
+		// certifying new ACP usage forward; it owns the acp_usage sources the
+		// transcript pipeline must not touch.
+		usagepipeline.NewACPCertifier(store, usagepipeline.ACPCertifierConfig{
+			Pricing:        ingestorConfig.Pricing,
+			OnPricingError: ingestorConfig.OnPricingError,
+			Logger:         log,
+		}).Start(ctx)
 	}
 	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, cfg.GitLab, log)
 	var prActions prsvc.ActionManager

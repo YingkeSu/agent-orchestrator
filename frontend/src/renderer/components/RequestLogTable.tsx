@@ -23,6 +23,7 @@ const SOURCE_LABEL_KEY: Record<string, MessageKey> = {
 	claude_subagent: "usage.log.source.claude_subagent",
 	codex_rollout: "usage.log.source.codex_rollout",
 	kimi_wire: "usage.log.source.kimi_wire",
+	acp_usage: "usage.log.source.acp_usage",
 };
 
 function sourceLabel(t: (key: MessageKey) => string, kind: string): string {

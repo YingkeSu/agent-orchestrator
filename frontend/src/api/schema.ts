@@ -2995,7 +2995,7 @@ export interface components {
             /** @description Owning session id. */
             sessionId: string;
             /** @enum {string} */
-            sourceKind: "claude_main" | "claude_subagent" | "codex_rollout" | "kimi_wire";
+            sourceKind: "claude_main" | "claude_subagent" | "codex_rollout" | "kimi_wire" | "acp_usage";
         };
         ControllersUsageRequestLogResponse: {
             items: components["schemas"]["ControllersUsageRequestLogEntryResponse"][];
@@ -13026,7 +13026,7 @@ export interface operations {
                 from?: string;
                 /** @description Inclusive upper created_at bound (RFC 3339). */
                 to?: string;
-                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). Omit for all sources. */
+                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire, acp_usage). Omit for all sources. */
                 source?: string;
                 /** @description Optional exact model id filter. Omit for all models. */
                 model?: string;
@@ -13082,7 +13082,7 @@ export interface operations {
                 from?: string;
                 /** @description Inclusive upper created_at bound (RFC 3339). */
                 to?: string;
-                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). Omit for all sources. */
+                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire, acp_usage). Omit for all sources. */
                 source?: string;
                 /** @description Optional exact model id filter. Omit for all models. */
                 model?: string;
@@ -13337,7 +13337,7 @@ export interface operations {
                 to?: string;
                 /** @description Bucket width. Defaults to hour; clamped to day when the range spans more than 31 days. */
                 bucket?: "hour" | "day";
-                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). */
+                /** @description Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire, acp_usage). */
                 source?: string;
                 /** @description Optional exact model id filter. */
                 model?: string;
