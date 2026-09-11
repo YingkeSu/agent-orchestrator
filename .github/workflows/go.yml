@@ -46,10 +46,12 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        # The SQLite migration package already runs close to Go's default
-        # 10-minute per-package limit under the race detector. Keep deadlock
-        # protection while leaving enough headroom for migration coverage.
-        run: go test -race -timeout=15m ./...
+        # The SQLite migration package runs well past Go's default 10-minute
+        # per-package limit under the race detector (the fork's usage module
+        # adds migrations 0136-0140 and its migration tests on top of
+        # upstream's). Keep deadlock protection while leaving enough headroom
+        # for migration coverage.
+        run: go test -race -timeout=30m ./...
 
   # The suite above only ever runs on Linux, so the packages whose behaviour is
   # genuinely platform-specific have never been exercised on Windows: worktree
