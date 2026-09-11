@@ -456,6 +456,75 @@ func TestUsageAPIReturnsRequestLogPage(t *testing.T) {
 	}
 }
 
+// The usage filters are stringly typed over source kinds, so a newly certified
+// kind must flow through the summary, aggregates, and request-log filters and
+// serialize without special-casing.
+func TestUsageAPIFilterCompatibilityForACPUsageKind(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	input, output := int64(381+99840), int64(691)
+	svc := &fakeUsageSummaryService{
+		global: domain.GlobalUsageSummary{
+			Totals:       domain.UsageMetricTotals{},
+			RequestCount: 1,
+			Sources:      []domain.UsageSourceKind{domain.UsageSourceACPUsage},
+			Models:       []string{"deepseek-v4-flash"},
+		},
+		logPage: domain.UsageRequestLogPage{
+			Items: []domain.UsageRequestLogEntry{
+				{
+					ID: 9, CreatedAt: &now, ModelID: "deepseek-v4-flash",
+					InputTokens: &input, OutputTokens: &output,
+					SourceKind: domain.UsageSourceACPUsage,
+					SessionID:  "worker-3", SessionExists: true,
+				},
+			},
+		},
+	}
+	srv := newUsageTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/summary?source=acp_usage", "")
+	if status != http.StatusOK {
+		t.Fatalf("summary status = %d, want 200; body=%s", status, body)
+	}
+	if svc.source != "acp_usage" {
+		t.Fatalf("summary source filter = %q, want acp_usage", svc.source)
+	}
+	var summary struct {
+		Sources      []string `json:"sources"`
+		RequestCount int64    `json:"requestCount"`
+	}
+	mustJSON(t, body, &summary)
+	if len(summary.Sources) != 1 || summary.Sources[0] != "acp_usage" {
+		t.Fatalf("summary sources = %+v, want [acp_usage]", summary.Sources)
+	}
+
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/usage/log?source=acp_usage", "")
+	if status != http.StatusOK {
+		t.Fatalf("log status = %d, want 200; body=%s", status, body)
+	}
+	if svc.logSource != "acp_usage" {
+		t.Fatalf("log source filter = %q, want acp_usage", svc.logSource)
+	}
+	var logResponse struct {
+		Items []struct {
+			ModelID    string `json:"modelId"`
+			SourceKind string `json:"sourceKind"`
+		} `json:"items"`
+	}
+	mustJSON(t, body, &logResponse)
+	if len(logResponse.Items) != 1 || logResponse.Items[0].SourceKind != "acp_usage" {
+		t.Fatalf("log items = %+v, want one acp_usage row", logResponse.Items)
+	}
+
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/usage/models?source=acp_usage", "")
+	if status != http.StatusOK {
+		t.Fatalf("models status = %d, want 200; body=%s", status, body)
+	}
+	if svc.modelSource != "acp_usage" {
+		t.Fatalf("models source filter not propagated: %q", svc.modelSource)
+	}
+}
+
 func TestUsageAPIReturnsNullBillingProviderWhenUnattributed(t *testing.T) {
 	svc := &fakeUsageSummaryService{logPage: domain.UsageRequestLogPage{
 		Items: []domain.UsageRequestLogEntry{

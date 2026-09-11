@@ -6708,12 +6708,12 @@ paths:
           format: date-time
           type: string
       - description: Optional usage source kind filter (claude_main, claude_subagent,
-          codex_rollout, kimi_wire). Omit for all sources.
+          codex_rollout, kimi_wire, acp_usage). Omit for all sources.
         in: query
         name: source
         schema:
           description: Optional usage source kind filter (claude_main, claude_subagent,
-            codex_rollout, kimi_wire). Omit for all sources.
+            codex_rollout, kimi_wire, acp_usage). Omit for all sources.
           type: string
       - description: Optional exact model id filter. Omit for all models.
         in: query
@@ -6769,12 +6769,12 @@ paths:
           format: date-time
           type: string
       - description: Optional usage source kind filter (claude_main, claude_subagent,
-          codex_rollout, kimi_wire). Omit for all sources.
+          codex_rollout, kimi_wire, acp_usage). Omit for all sources.
         in: query
         name: source
         schema:
           description: Optional usage source kind filter (claude_main, claude_subagent,
-            codex_rollout, kimi_wire). Omit for all sources.
+            codex_rollout, kimi_wire, acp_usage). Omit for all sources.
           type: string
       - description: Optional exact model id filter. Omit for all models.
         in: query
@@ -7012,12 +7012,12 @@ paths:
           - day
           type: string
       - description: Optional usage source kind filter (claude_main, claude_subagent,
-          codex_rollout, kimi_wire).
+          codex_rollout, kimi_wire, acp_usage).
         in: query
         name: source
         schema:
           description: Optional usage source kind filter (claude_main, claude_subagent,
-            codex_rollout, kimi_wire).
+            codex_rollout, kimi_wire, acp_usage).
           type: string
       - description: Optional exact model id filter.
         in: query
@@ -8572,6 +8572,7 @@ components:
           - claude_subagent
           - codex_rollout
           - kimi_wire
+          - acp_usage
           type: string
       required:
       - id

@@ -1335,6 +1335,122 @@ func (q *Queries) InsertUsageSource(ctx context.Context, arg InsertUsageSourcePa
 	return i, err
 }
 
+const listACPUsageEventConversations = `-- name: ListACPUsageEventConversations :many
+SELECT
+    cpe.conversation_id,
+    cpe.session_id,
+    CAST(MAX(cpe.id) AS INTEGER) AS last_event_id
+FROM conversation_provider_events cpe
+WHERE cpe.method = 'usage'
+GROUP BY cpe.conversation_id, cpe.session_id
+ORDER BY cpe.conversation_id
+`
+
+type ListACPUsageEventConversationsRow struct {
+	ConversationID string
+	SessionID      domain.SessionID
+	LastEventID    int64
+}
+
+// Conversations whose durable provider-event archive carries usage facts, with
+// the newest usage row id. The ACP certifier compares last_event_id against
+// each conversation's acp_usage source cursor to find work; the scan is the
+// backfill entry point as well as the live poll, because the archive is
+// durable AO state rather than a rotated transcript.
+func (q *Queries) ListACPUsageEventConversations(ctx context.Context) ([]ListACPUsageEventConversationsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listACPUsageEventConversations)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListACPUsageEventConversationsRow{}
+	for rows.Next() {
+		var i ListACPUsageEventConversationsRow
+		if err := rows.Scan(&i.ConversationID, &i.SessionID, &i.LastEventID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listACPUsageEventsAfter = `-- name: ListACPUsageEventsAfter :many
+SELECT
+    id,
+    session_id,
+    payload_json,
+    received_at
+FROM conversation_provider_events
+WHERE conversation_id = ?1
+  AND session_id = ?2
+  AND method = 'usage'
+  AND id > ?3
+ORDER BY id
+LIMIT ?4
+`
+
+type ListACPUsageEventsAfterParams struct {
+	ConversationID    string
+	ArchivedBySession domain.SessionID
+	AfterID           int64
+	Limit             int64
+}
+
+type ListACPUsageEventsAfterRow struct {
+	ID          int64
+	SessionID   domain.SessionID
+	PayloadJson string
+	ReceivedAt  time.Time
+}
+
+// One bounded, id-ordered page of the conversation's archived usage events
+// past the certifier cursor, scoped to the session that archived them. The
+// session predicate keeps binding identity and event identity aligned: a
+// binding is (session_id, harness, native_root_id), so rows archived under
+// a different session of the same rebound conversation must never reach
+// this binding's cursor, or they would re-derive fresh acp:<row_id> keys
+// under its binding_id and double-count. The row id is the replay
+// identity: it keys the emitted model_usage_events.source_event_key, so a
+// re-scan deduplicates through UNIQUE(binding_id, source_event_key).
+func (q *Queries) ListACPUsageEventsAfter(ctx context.Context, arg ListACPUsageEventsAfterParams) ([]ListACPUsageEventsAfterRow, error) {
+	rows, err := q.db.QueryContext(ctx, listACPUsageEventsAfter,
+		arg.ConversationID,
+		arg.ArchivedBySession,
+		arg.AfterID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListACPUsageEventsAfterRow{}
+	for rows.Next() {
+		var i ListACPUsageEventsAfterRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.PayloadJson,
+			&i.ReceivedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCompactSessionUsage = `-- name: ListCompactSessionUsage :many
 SELECT
     ub.session_id,
@@ -2349,7 +2465,8 @@ SELECT us.id, us.binding_id, us.kind, us.native_session_id, us.subagent_id, us.a
 FROM usage_sources us
 JOIN usage_bindings ub ON ub.id = us.binding_id
 JOIN sessions s ON s.id = ub.session_id
-WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
+WHERE us.kind <> 'acp_usage'
+  AND (s.is_terminated = 0 OR ub.state = 'finalizing')
   AND NOT (
       us.state = 'complete'
       AND us.last_error_code = 'artifact_replaced'
@@ -2365,6 +2482,8 @@ WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
 ORDER BY us.artifact_path, us.generation, us.id
 `
 
+// acp_usage sources are table-backed, not transcript files: the file watcher
+// would only fail to open their artifact path. The ACP certifier owns them.
 func (q *Queries) ListWatchableUsageSources(ctx context.Context) ([]UsageSource, error) {
 	rows, err := q.db.QueryContext(ctx, listWatchableUsageSources)
 	if err != nil {
@@ -2493,6 +2612,20 @@ func (q *Queries) RehomeOpenUsageEventToReplacementSource(ctx context.Context, a
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const selectConversationUsageModel = `-- name: SelectConversationUsageModel :one
+SELECT model FROM conversations WHERE id = ?
+`
+
+// The conversation's durable model choice (conversations.model; NULL when the
+// user never picked one and the provider default answered). The ACP usage
+// payload names no model, so this row is the attribution evidence.
+func (q *Queries) SelectConversationUsageModel(ctx context.Context, id string) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, selectConversationUsageModel, id)
+	var model sql.NullString
+	err := row.Scan(&model)
+	return model, err
 }
 
 const touchUsageBinding = `-- name: TouchUsageBinding :exec

@@ -2239,6 +2239,65 @@ func TestKimiUsageEventRoundTrip(t *testing.T) {
 	}
 }
 
+// TestACPUsageEventRoundTrip pins the acp_usage storage contract: the widened
+// CHECKs accept the provider-neutral chat vocabulary on any harness, the
+// unknown cache split stores as NULL (nil, never a guessed zero), and a
+// transcript-vocabulary event is rejected on an ACP source.
+func TestACPUsageEventRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessOpenCode)
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "conv-acp",
+		State:        domain.UsageBindingActive,
+	})
+	source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+		BindingID:    binding.ID,
+		Kind:         domain.UsageSourceACPUsage,
+		ArtifactPath: "acp:conv-acp",
+		State:        domain.UsageSourceActive,
+	})
+	input := int64(467 + 293760)
+	output := int64(417)
+	event := domain.ModelUsageEvent{
+		ProviderID:        domain.UsageProviderACP,
+		ModelID:           "deepseek-v4-flash",
+		MeasurementKind:   domain.UsageMeasurementNativeReported,
+		Tokens:            domain.UsageTokenMetrics{InputTokens: &input, OutputTokens: &output},
+		ProviderUsageJSON: `{"InputTokens":467,"OutputTokens":417,"CachedTokens":293760,"TotalsKnown":true}`,
+		SourceEventKey:    "acp:1",
+		CreatedAt:         now,
+	}
+	if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 1, State: domain.UsageSourceActive,
+		UpdatedAt: now,
+	}, []domain.ModelUsageEvent{event}, nil); err != nil {
+		t.Fatalf("apply ACP usage: %v", err)
+	}
+
+	models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+	mustNoError(t, err)
+	if len(models) != 1 || models[0].Harness != domain.HarnessOpenCode || models[0].ModelID != "deepseek-v4-flash" ||
+		usageTokenValue(models[0].Tokens.InputTokens) != input ||
+		models[0].Tokens.CachedInputTokens != nil ||
+		models[0].Tokens.UncachedInputTokens != nil ||
+		usageTokenValue(models[0].Tokens.OutputTokens) != output {
+		t.Fatalf("ACP aggregate = %+v", models)
+	}
+
+	// The transcript vocabularies stay invalid on an ACP source: provider_id
+	// names the vocabulary the counters were normalized into.
+	wrong := event
+	wrong.SourceEventKey = "acp:2"
+	wrong.ProviderID = domain.UsageProviderAnthropic
+	if err := s.ApplyUsageChunk(context.Background(), source.ID, 1, now, domain.SourceCursorState{
+		ByteOffset: 2, State: domain.UsageSourceActive,
+		UpdatedAt: now,
+	}, []domain.ModelUsageEvent{wrong}, nil); err == nil {
+		t.Fatal("anthropic-vocabulary event accepted on an acp_usage source")
+	}
+}
+
 func seedUsageSource(t *testing.T, s *sqlite.Store, sess domain.SessionRecord, now time.Time) domain.UsageSourceRecord {
 	t.Helper()
 	initialModelID := "gpt-5"

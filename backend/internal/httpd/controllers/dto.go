@@ -1462,12 +1462,13 @@ type UsageSummaryResponse struct {
 // per-provider aggregate endpoints. from/to bound the created_at range
 // (inclusive, RFC 3339); omitting either leaves that side unbounded. source
 // filters by usage source kind (claude_main, claude_subagent, codex_rollout,
-// kimi_wire) and model by exact model id; omitting either leaves that filter
-// unbounded, matching the optional filter params the summary accepts.
+// kimi_wire, acp_usage) and model by exact model id; omitting either leaves
+// that filter unbounded, matching the optional filter params the summary
+// accepts.
 type UsageAggregatesQuery struct {
 	From   string `query:"from,omitempty" description:"Inclusive lower created_at bound (RFC 3339)." format:"date-time"`
 	To     string `query:"to,omitempty" description:"Inclusive upper created_at bound (RFC 3339)." format:"date-time"`
-	Source string `query:"source,omitempty" description:"Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire). Omit for all sources."`
+	Source string `query:"source,omitempty" description:"Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire, acp_usage). Omit for all sources."`
 	Model  string `query:"model,omitempty" description:"Optional exact model id filter. Omit for all models."`
 }
 
@@ -1539,7 +1540,7 @@ type UsageRequestLogEntryResponse struct {
 	EstimatedCostNanos       *int64     `json:"estimatedCostNanos" minimum:"0" description:"Durable nano-USD estimate, null when not yet priced."`
 	LLMMS                    *int64     `json:"llmMs" minimum:"0" description:"LLM elapsed in milliseconds (transcript-clock interval), null when unknown."`
 	FirstTokenMS             *int64     `json:"firstTokenMs" minimum:"0" description:"First-token latency in milliseconds (user send to first response received), null when unknown."`
-	SourceKind               string     `json:"sourceKind" enum:"claude_main,claude_subagent,codex_rollout,kimi_wire"`
+	SourceKind               string     `json:"sourceKind" enum:"claude_main,claude_subagent,codex_rollout,kimi_wire,acp_usage"`
 	SessionID                string     `json:"sessionId" description:"Owning session id."`
 	SessionExists            bool       `json:"sessionExists" description:"Whether the owning session row still exists and can be opened."`
 }
@@ -1569,7 +1570,7 @@ type UsageTrendQuery struct {
 	From   string `query:"from" description:"Inclusive lower created_at bound (RFC 3339). Required." format:"date-time"`
 	To     string `query:"to" description:"Inclusive upper created_at bound (RFC 3339). Required." format:"date-time"`
 	Bucket string `query:"bucket,omitempty" enum:"hour,day" description:"Bucket width. Defaults to hour; clamped to day when the range spans more than 31 days."`
-	Source string `query:"source,omitempty" description:"Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire)."`
+	Source string `query:"source,omitempty" description:"Optional usage source kind filter (claude_main, claude_subagent, codex_rollout, kimi_wire, acp_usage)."`
 	Model  string `query:"model,omitempty" description:"Optional exact model id filter."`
 }
 
