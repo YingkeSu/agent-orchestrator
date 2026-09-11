@@ -235,6 +235,9 @@ func migrate(db *sql.DB) error {
 	if err := repairRenumberedPRReviewPartialMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered PR review-partial migration history: %w", err)
 	}
+	if err := prepareForkUsageMigrationHistory(db); err != nil {
+		return fmt.Errorf("prepare fork usage migration history: %w", err)
+	}
 	if err := prepareBurnedSchemaRepairs(db); err != nil {
 		return fmt.Errorf("prepare burned schema repairs: %w", err)
 	}
@@ -603,6 +606,151 @@ SELECT (SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'auto_in
 	}
 
 	return tx.Commit()
+}
+
+// prepareForkUsageMigrationHistory repairs databases that recorded the fork's
+// usage migrations at their original numbers (0129-0133) before upstream
+// claimed those numbers. Two independent wounds:
+//
+//  1. goose sees 129-133 as applied and silently skips upstream's 0129-0133.
+//     review_partial (0130), conversations.opencode_mode (0132), and
+//     shell_terminals.transient (0133) are columns, so their schemaRepairs
+//     entries below replay them. Only 0129's change-log retention index is
+//     replayed here, because an index has no column to key a repair on. 0131's
+//     data repair rewrites review_partial=FALSE rows carrying a FALSE default,
+//     which the schemaRepairs addDDL never produces (it adds DEFAULT TRUE), so
+//     there is nothing to replay.
+//  2. The renumbered fork usage migrations 0136-0140 are not recorded, so
+//     goose would re-run their bodies over the already-present schema and
+//     abort on 0136's duplicate CREATE INDEX. Each is recorded as applied only
+//     when its full physical shape already exists, so a partial or
+//     legacy-shaped database still lets goose run the real migration.
+//
+// Fresh databases (no usage tables) and databases where upstream's 0132/0133
+// columns already exist are left untouched.
+func prepareForkUsageMigrationHistory(db *sql.DB) error {
+	var gooseTable int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`,
+	).Scan(&gooseTable); err != nil {
+		return err
+	}
+	if gooseTable == 0 {
+		return nil
+	}
+
+	var usageTables int
+	if err := db.QueryRow(`
+SELECT COUNT(*) FROM sqlite_master
+WHERE type = 'table' AND name IN ('usage_bindings', 'usage_sources', 'model_usage_events')`).Scan(&usageTables); err != nil {
+		return err
+	}
+	if usageTables != 3 {
+		return nil
+	}
+
+	var applied129, opencodeModeCol, transientCol int
+	if err := db.QueryRow(`
+SELECT
+    COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = 129 ORDER BY id DESC LIMIT 1), 0),
+    (SELECT COUNT(*) FROM pragma_table_info('conversations') WHERE name = 'opencode_mode'),
+    (SELECT COUNT(*) FROM pragma_table_info('shell_terminals') WHERE name = 'transient')`).Scan(&applied129, &opencodeModeCol, &transientCol); err != nil {
+		return err
+	}
+	if applied129 == 0 {
+		return nil
+	}
+	if opencodeModeCol > 0 && transientCol > 0 {
+		return nil
+	}
+
+	// Replay upstream's 0129 change-log retention index idempotently.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_change_log_created_at_seq ON change_log (created_at, seq)`); err != nil {
+		return err
+	}
+
+	return recordRenumberedForkUsageMigrations(db)
+}
+
+// recordRenumberedForkUsageMigrations records the renumbered fork usage
+// migrations (0136-0140) as applied only when each migration's full physical
+// shape already exists. 0139 and 0140 rebuild the same provider-neutral ACP
+// target shape, so they share one check.
+func recordRenumberedForkUsageMigrations(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, version := range []int64{136, 137, 138, 139, 140} {
+		present, err := forkUsageMigrationShapePresent(tx, version)
+		if err != nil {
+			return err
+		}
+		if !present {
+			continue
+		}
+		var applied int
+		if err := tx.QueryRow(
+			`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = ? ORDER BY id DESC LIMIT 1), 0)`, version,
+		).Scan(&applied); err != nil {
+			return err
+		}
+		if applied != 0 {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, version); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// forkUsageMigrationShapePresent reports whether the physical effect of the
+// renumbered fork usage migration is already present in the schema.
+func forkUsageMigrationShapePresent(tx *sql.Tx, version int64) (bool, error) {
+	switch version {
+	case 136:
+		var n int
+		if err := tx.QueryRow(`
+SELECT COUNT(*) FROM sqlite_master
+WHERE type = 'index' AND name = 'idx_model_usage_events_created_at'`).Scan(&n); err != nil {
+			return false, err
+		}
+		return n > 0, nil
+	case 137:
+		var n int
+		if err := tx.QueryRow(`
+SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'model_usage_event_timing')
+     + (SELECT COUNT(*) FROM pragma_table_info('model_usage_event_timing')
+        WHERE name IN ('event_id', 'round_seq', 'llm_ms', 'tool_ms', 'first_token_ms', 'created_at'))`).Scan(&n); err != nil {
+			return false, err
+		}
+		return n == 7, nil
+	case 138:
+		var n int
+		if err := tx.QueryRow(`
+SELECT COUNT(*) FROM pragma_table_info('model_usage_events')
+WHERE name = 'cache_creation_input_tokens'`).Scan(&n); err != nil {
+			return false, err
+		}
+		return n > 0, nil
+	case 139, 140:
+		var n int
+		if err := tx.QueryRow(`
+SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'usage_sources'
+         AND instr(COALESCE(sql, ''), '''acp_usage''') > 0)
+     + (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'usage_bindings'
+         AND instr(COALESCE(sql, ''), 'length(trim(harness)) > 0') > 0)
+     + (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'model_usage_events'
+         AND instr(COALESCE(sql, ''), '''acp''') > 0)`).Scan(&n); err != nil {
+			return false, err
+		}
+		return n == 3, nil
+	default:
+		return false, nil
+	}
 }
 
 func prepareBurnedSchemaRepairs(db *sql.DB) error {
@@ -1576,6 +1724,16 @@ BEGIN
 	// matches the migration: unknown historical certainty stays partial.
 	{version: 130, table: "pr", column: "review_partial",
 		addDDL: `ALTER TABLE pr ADD COLUMN review_partial BOOLEAN NOT NULL DEFAULT TRUE`},
+	// 0132_conversation_opencode_mode.sql. Generated chat queries select this
+	// column, so a fork-burn database (which recorded 132 as a usage migration)
+	// must still receive upstream's column.
+	{version: 132, table: "conversations", column: "opencode_mode",
+		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
+	// 0133_shell_terminal_lifetime.sql. Generated shell queries select this
+	// column, so a fork-burn database (which recorded 133 as a usage migration)
+	// must still receive upstream's column.
+	{version: 133, table: "shell_terminals", column: "transient",
+		addDDL: `ALTER TABLE shell_terminals ADD COLUMN transient BOOLEAN NOT NULL DEFAULT FALSE`},
 }
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
