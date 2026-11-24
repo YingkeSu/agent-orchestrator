@@ -131,8 +131,8 @@ func TestLaunchUsesACPProfileAndWritesStandingPatch(t *testing.T) {
 	if launch.Env["PATH"] != "/usr/local/bin" || launch.Env["KEEP"] != "yes" {
 		t.Fatalf("env = %#v, want the session environment preserved", launch.Env)
 	}
-	if _, ok := launch.Env["DSH_PERMISSION_MODE"]; ok {
-		t.Fatalf("env unexpectedly sets DSH_PERMISSION_MODE: %#v", launch.Env)
+	if got := launch.Env["DSH_PERMISSION_MODE"]; got != "workspace-write" {
+		t.Fatalf("DSH_PERMISSION_MODE = %q, want an explicit workspace-write override", got)
 	}
 
 	data, err := os.ReadFile(patchPath)
@@ -203,8 +203,8 @@ func TestLaunchKeepsWorkspaceWriteSandboxForOtherModes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Launch: %v", err)
 			}
-			if _, ok := launch.Env["DSH_PERMISSION_MODE"]; ok {
-				t.Fatalf("env = %#v, want DSH's own workspace-write default", launch.Env)
+			if got := launch.Env["DSH_PERMISSION_MODE"]; got != "workspace-write" {
+				t.Fatalf("DSH_PERMISSION_MODE = %q, want an explicit workspace-write override", got)
 			}
 		})
 	}

@@ -164,14 +164,10 @@ func TestBinarySpecCoversRequiredLocations(t *testing.T) {
 	if !reflect.DeepEqual(dshBinarySpec.Names, []string{"dsh"}) {
 		t.Fatalf("Names = %#v", dshBinarySpec.Names)
 	}
-	foundUserLocal := false
 	for _, path := range dshBinarySpec.UnixPaths {
-		if path == "/home/syk/.local/bin/dsh" {
-			foundUserLocal = true
+		if strings.Contains(path, "/home/") {
+			t.Fatalf("UnixPaths must not hardcode a user home: %#v", dshBinarySpec.UnixPaths)
 		}
-	}
-	if !foundUserLocal {
-		t.Fatalf("UnixPaths = %#v, want the explicit /home/syk/.local/bin/dsh fallback", dshBinarySpec.UnixPaths)
 	}
 	foundHomeLocal := false
 	for _, parts := range dshBinarySpec.UnixHomePaths {

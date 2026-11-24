@@ -131,10 +131,15 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 		return nil, nil, err
 	}
 	args := []string{"--profile", "acp"}
-	var env map[string]string
+	// Set the preset explicitly for every mode. The launched process inherits
+	// AO's environment, so merely omitting the variable would let an inherited
+	// DSH_PERMISSION_MODE=danger-full-access disable DSH's sandbox while AO's
+	// ACP permission policy still claims approvals gate tools.
+	preset := "workspace-write"
 	if ports.NormalizePermissionMode(cfg.Permissions) == ports.PermissionModeBypassPermissions {
-		env = map[string]string{permissionModeEnv: dangerFullAccessPreset}
+		preset = dangerFullAccessPreset
 	}
+	env := map[string]string{permissionModeEnv: preset}
 	if prompt := strings.TrimSpace(cfg.SystemPrompt); prompt != "" {
 		patchPath, err := writeStandingPatch(ctx, cfg, prompt)
 		if err != nil {

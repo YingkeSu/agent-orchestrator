@@ -21,6 +21,7 @@ func TestParseVersion(t *testing.T) {
 		{input: "dsh 0.2.1-rc.2", ok: true},
 		{input: "0.2.1+build.5", ok: true},
 		{input: "0.2.1-rc.2+build.5", ok: true},
+		{input: "0.2.1-rc.2\nwarning: 9.9.9 available", ok: true},
 		{input: "not a version"},
 		{input: ""},
 	}
@@ -136,4 +137,19 @@ func mustVersion(t *testing.T, value string) Version {
 		t.Fatalf("ParseVersion(%q) failed", value)
 	}
 	return parsed
+}
+
+
+func TestProbeVersionIgnoresStderrWarnings(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake dsh binary uses a Unix shebang")
+	}
+	path := filepath.Join(t.TempDir(), "dsh")
+	script := "#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then\n  echo \"warning: Node 18.20.4\" >&2\n  echo \"0.2.1-rc.2\"\n  exit 0\nfi\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ProbeVersion(context.Background(), path); err != nil {
+		t.Fatalf("ProbeVersion with stderr noise: %v", err)
+	}
 }

@@ -51,10 +51,16 @@ func (v Version) Less(other Version) bool {
 	return comparePrerelease(v.Pre, other.Pre) < 0
 }
 
-// ParseVersion extracts a semantic version from output. It reports false when no
-// version-shaped token is present.
+// ParseVersion extracts a semantic version from the first non-empty line of
+// output. `dsh --version` prints exactly one version line; restricting the scan
+// to that line keeps a warning or update notice on a later line from being
+// mistaken for the installed version.
 func ParseVersion(output string) (Version, bool) {
-	match := versionPattern.FindStringSubmatch(strings.TrimSpace(output))
+	line := strings.TrimSpace(output)
+	if index := strings.IndexByte(line, '\n'); index >= 0 {
+		line = strings.TrimSpace(line[:index])
+	}
+	match := versionPattern.FindStringSubmatch(line)
 	if len(match) != 5 {
 		return Version{}, false
 	}
@@ -96,7 +102,9 @@ func ProbeVersion(ctx context.Context, bin string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	output, err := aoprocess.CommandContext(ctx, bin, "--version").CombinedOutput()
+	// Stdout carries the version. A warning on stderr (for example a Node engine
+	// notice) must not be parsed as the installed version.
+	output, err := aoprocess.CommandContext(ctx, bin, "--version").Output()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr

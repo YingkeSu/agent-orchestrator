@@ -104,7 +104,7 @@ var dshBinarySpec = binaryutil.BinarySpec{
 	Label:         "dsh",
 	Names:         []string{"dsh"},
 	WinNames:      []string{"dsh.cmd", "dsh.exe", "dsh"},
-	UnixPaths:     []string{"/usr/local/bin/dsh", "/opt/homebrew/bin/dsh", "/home/syk/.local/bin/dsh"},
+	UnixPaths:     []string{"/usr/local/bin/dsh", "/opt/homebrew/bin/dsh"},
 	UnixHomePaths: binaryutil.NodeManagedUnixHomePaths("dsh", []string{".local", "bin", "dsh"}),
 	NodeManaged:   true,
 	WinPaths: []binaryutil.WinPath{
