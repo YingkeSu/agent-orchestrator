@@ -2702,6 +2702,10 @@ type ExternalSessionExecutionView struct {
 	Branch                string               `json:"branch,omitempty"`
 	PRs                   []ExternalSessionPRView `json:"prs,omitempty"`
 	UpdatedAt             time.Time            `json:"updatedAt"`
+	// Revision is an opaque monotonic token for polling. It changes when the
+	// durable session or PR facts change; a client compares it with a state
+	// fingerprint to dedupe reports.
+	Revision int64 `json:"revision"`
 }
 
 // ExternalSessionView is one external work item's durable mapping plus AO's

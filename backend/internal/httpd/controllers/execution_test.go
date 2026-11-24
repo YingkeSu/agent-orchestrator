@@ -102,6 +102,9 @@ func TestExecutionEnsureReturnsCreatedSession(t *testing.T) {
 	if !out.Created || out.Session.ExternalRef != "superagent:tk_1" || out.Session.SessionID != "proj-1" {
 		t.Fatalf("response = %+v", out)
 	}
+	if out.Session.Execution.Revision == 0 {
+		t.Fatalf("revision = 0, want a non-zero polling token")
+	}
 	if !out.Session.Execution.NeedsPerson || out.Session.Execution.WaitingReason != "question" {
 		t.Fatalf("needsPerson = %+v, want question", out.Session.Execution)
 	}

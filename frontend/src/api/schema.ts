@@ -3490,6 +3490,8 @@ export interface components {
             /** @description True when AO is waiting on a human decision, approval, or input. */
             needsPerson: boolean;
             prs?: components["schemas"]["ExternalSessionPRView"][];
+            /** Format: int64 */
+            revision: number;
             /** @enum {string} */
             status: "working" | "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "approved" | "mergeable" | "merged" | "needs_input" | "exited" | "idle" | "terminated" | "no_signal";
             /** Format: date-time */

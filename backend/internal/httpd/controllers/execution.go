@@ -188,6 +188,7 @@ func externalSessionView(view execsvc.View) ExternalSessionView {
 			Branch:                view.Session.Metadata.Branch,
 			PRs:                   prs,
 			UpdatedAt:             view.Session.UpdatedAt,
+			Revision:              view.Session.UpdatedAt.UnixNano(),
 		},
 	}
 }

@@ -9978,6 +9978,9 @@ components:
           items:
             $ref: '#/components/schemas/ExternalSessionPRView'
           type: array
+        revision:
+          format: int64
+          type: integer
         status:
           enum:
           - working
@@ -10013,6 +10016,7 @@ components:
       - isTerminated
       - needsPerson
       - updatedAt
+      - revision
       type: object
     ExternalSessionPRView:
       properties:
