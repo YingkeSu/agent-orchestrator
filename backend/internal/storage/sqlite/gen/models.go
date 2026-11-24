@@ -324,6 +324,16 @@ type ConversationTurn struct {
 	RetryOfTurnID        sql.NullString
 }
 
+type ExternalSession struct {
+	ExternalRef        string
+	ProjectID          domain.ProjectID
+	SessionID          domain.SessionID
+	AssignmentRef      string
+	RequestFingerprint string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
 type ModelUsageEvent struct {
 	ID                       int64
 	BindingID                int64

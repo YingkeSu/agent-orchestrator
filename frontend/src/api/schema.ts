@@ -532,6 +532,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/execution/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a project's external work items and their execution state */
+        get: operations["listExternalSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/execution/sessions/{externalRef}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read an external work item's AO session and derived execution state */
+        get: operations["getExternalSession"];
+        /** Ensure one AO session for an external work item (idempotent) */
+        put: operations["ensureExternalSession"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/execution/sessions/{externalRef}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop an external work item's AO session (idempotent) */
+        post: operations["stopExternalSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/identity": {
         parameters: {
             query?: never;
@@ -3377,6 +3429,26 @@ export interface components {
             accountIds?: string[];
             includeUsage?: boolean;
         };
+        EnsureExternalSessionRequest: {
+            /** @description Current execution generation within the external work item. */
+            assignmentRef?: string;
+            branch?: string;
+            displayName?: string;
+            /** @enum {string} */
+            harness?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "prime-agent" | "autohand";
+            issueId?: string;
+            /** @enum {string} */
+            mode?: "chat" | "tui";
+            model?: string;
+            projectId: string;
+            prompt?: string;
+            /** @description Stable hash of the immutable launch parameters. A changed fingerprint for the same externalRef is a conflict. */
+            requestFingerprint: string;
+        };
+        EnsureExternalSessionResponse: {
+            created: boolean;
+            session: components["schemas"]["ExternalSessionView"];
+        };
         EstimatedCostResponse: {
             /** Format: int64 */
             cachedInputNanos: null | number;
@@ -3402,6 +3474,51 @@ export interface components {
             session: components["schemas"]["ControllersSessionView"];
             sessionId: string;
         };
+        ExternalSessionExecutionView: {
+            /** @enum {string} */
+            activity: "active" | "idle" | "waiting_input" | "blocked" | "exited";
+            /** Format: date-time */
+            activityAt: string;
+            branch?: string;
+            /** @enum {string} */
+            displayStatus: "Working" | "Blocked" | "Exited" | "No signal" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            isTerminated: boolean;
+            /** @enum {string} */
+            kanbanColumn: "building" | "validating" | "needs_review" | "ready" | "archive";
+            latestAssistantUpdate?: string;
+            latestUserPrompt?: string;
+            /** @description True when AO is waiting on a human decision, approval, or input. */
+            needsPerson: boolean;
+            prs?: components["schemas"]["ExternalSessionPRView"][];
+            /** Format: int64 */
+            revision: number;
+            /** @enum {string} */
+            status: "working" | "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "approved" | "mergeable" | "merged" | "needs_input" | "exited" | "idle" | "terminated" | "no_signal";
+            /** Format: date-time */
+            updatedAt: string;
+            /** @enum {string} */
+            waitingReason?: "question" | "approval" | "input";
+        };
+        ExternalSessionPRView: {
+            ci?: string;
+            mergeability?: string;
+            number: number;
+            review?: string;
+            /** @enum {string} */
+            state: "draft" | "open" | "merged" | "closed";
+            url: string;
+        };
+        ExternalSessionView: {
+            assignmentRef?: string;
+            /** Format: date-time */
+            createdAt: string;
+            execution: components["schemas"]["ExternalSessionExecutionView"];
+            externalRef: string;
+            projectId: string;
+            sessionId: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
         FirstTokenCoverageResponse: {
             /**
              * Format: int64
@@ -3413,6 +3530,9 @@ export interface components {
              * @description Requests that could have carried a first-token latency.
              */
             total: number;
+        };
+        GetExternalSessionResponse: {
+            session: components["schemas"]["ExternalSessionView"];
         };
         GitHubRepositoryPreparation: {
             name?: string;
@@ -3546,6 +3666,9 @@ export interface components {
         };
         ListCompactSessionUsageResponse: {
             sessions: components["schemas"]["CompactSessionUsageResponse"][];
+        };
+        ListExternalSessionsResponse: {
+            sessions: components["schemas"]["ExternalSessionView"][];
         };
         ListNotificationsResponse: {
             nextCursor?: string;
@@ -4345,6 +4468,13 @@ export interface components {
         SteerConversationResponse: {
             activityId?: string;
             providerTurnId: string;
+        };
+        StopExternalSessionRequest: {
+            reason?: string;
+        };
+        StopExternalSessionResponse: {
+            session: components["schemas"]["ExternalSessionView"];
+            stopped: boolean;
         };
         SubmitAgentHandoffRequest: {
             /** @description Structured, source-agent-authored handoff enrichment. */
@@ -6199,6 +6329,250 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listExternalSessions: {
+        parameters: {
+            query: {
+                /** @description Project whose external sessions to list. */
+                projectId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListExternalSessionsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getExternalSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description External orchestrator work-item id, e.g. superagent:tk_123. */
+                externalRef: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GetExternalSessionResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    ensureExternalSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description External orchestrator work-item id, e.g. superagent:tk_123. */
+                externalRef: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnsureExternalSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnsureExternalSessionResponse"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnsureExternalSessionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    stopExternalSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description External orchestrator work-item id, e.g. superagent:tk_123. */
+                externalRef: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StopExternalSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StopExternalSessionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

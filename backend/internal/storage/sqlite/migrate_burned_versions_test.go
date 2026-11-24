@@ -145,6 +145,8 @@ var shippedMigrations = map[int64]string{
 	138: "0138_usage_cache_creation_split.sql",
 	139: "0139_usage_acp_source.sql",
 	140: "0140_reconcile_acp_usage_schema.sql",
+	141: "0141_external_sessions.sql",
+	142: "0142_allow_dsh_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

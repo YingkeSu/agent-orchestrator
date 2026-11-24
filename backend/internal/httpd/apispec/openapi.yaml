@@ -1216,6 +1216,197 @@ paths:
       summary: Stream CDC events with durable replay
       tags:
       - events
+  /api/v1/execution/sessions:
+    get:
+      operationId: listExternalSessions
+      parameters:
+      - description: Project whose external sessions to list.
+        in: query
+        name: projectId
+        required: true
+        schema:
+          description: Project whose external sessions to list.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListExternalSessionsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List a project's external work items and their execution state
+      tags:
+      - execution
+  /api/v1/execution/sessions/{externalRef}:
+    get:
+      operationId: getExternalSession
+      parameters:
+      - description: External orchestrator work-item id, e.g. superagent:tk_123.
+        in: path
+        name: externalRef
+        required: true
+        schema:
+          description: External orchestrator work-item id, e.g. superagent:tk_123.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetExternalSessionResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read an external work item's AO session and derived execution state
+      tags:
+      - execution
+    put:
+      operationId: ensureExternalSession
+      parameters:
+      - description: External orchestrator work-item id, e.g. superagent:tk_123.
+        in: path
+        name: externalRef
+        required: true
+        schema:
+          description: External orchestrator work-item id, e.g. superagent:tk_123.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnsureExternalSessionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnsureExternalSessionResponse'
+          description: OK
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnsureExternalSessionResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Ensure one AO session for an external work item (idempotent)
+      tags:
+      - execution
+  /api/v1/execution/sessions/{externalRef}/stop:
+    post:
+      operationId: stopExternalSession
+      parameters:
+      - description: External orchestrator work-item id, e.g. superagent:tk_123.
+        in: path
+        name: externalRef
+        required: true
+        schema:
+          description: External orchestrator work-item id, e.g. superagent:tk_123.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StopExternalSessionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StopExternalSessionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stop an external work item's AO session (idempotent)
+      tags:
+      - execution
   /api/v1/identity:
     get:
       operationId: getIdentity
@@ -9592,6 +9783,82 @@ components:
         includeUsage:
           type: boolean
       type: object
+    EnsureExternalSessionRequest:
+      properties:
+        assignmentRef:
+          description: Current execution generation within the external work item.
+          maxLength: 256
+          type: string
+        branch:
+          maxLength: 256
+          type: string
+        displayName:
+          maxLength: 20
+          type: string
+        harness:
+          enum:
+          - claude-code
+          - codex
+          - aider
+          - opencode
+          - grok
+          - droid
+          - amp
+          - agy
+          - crush
+          - cursor
+          - qwen
+          - copilot
+          - goose
+          - auggie
+          - continue
+          - devin
+          - cline
+          - kimi
+          - muse
+          - kiro
+          - kilocode
+          - vibe
+          - pi
+          - kimchi
+          - omp
+          - prime-agent
+          - autohand
+          type: string
+        issueId:
+          type: string
+        mode:
+          enum:
+          - chat
+          - tui
+          type: string
+        model:
+          maxLength: 256
+          type: string
+        projectId:
+          type: string
+        prompt:
+          maxLength: 16384
+          type: string
+        requestFingerprint:
+          description: Stable hash of the immutable launch parameters. A changed fingerprint
+            for the same externalRef is a conflict.
+          maxLength: 256
+          type: string
+      required:
+      - projectId
+      - requestFingerprint
+      type: object
+    EnsureExternalSessionResponse:
+      properties:
+        created:
+          type: boolean
+        session:
+          $ref: '#/components/schemas/ExternalSessionView'
+      required:
+      - created
+      - session
+      type: object
     EstimatedCostResponse:
       properties:
         cachedInputNanos:
@@ -9651,6 +9918,156 @@ components:
       - sessionId
       - session
       type: object
+    ExternalSessionExecutionView:
+      properties:
+        activity:
+          enum:
+          - active
+          - idle
+          - waiting_input
+          - blocked
+          - exited
+          type: string
+        activityAt:
+          format: date-time
+          type: string
+        branch:
+          type: string
+        displayStatus:
+          enum:
+          - Working
+          - Blocked
+          - Exited
+          - No signal
+          - Awaiting PR
+          - Fixing CI failures
+          - Addressing comments
+          - Needs review
+          - Review scheduled
+          - Reviewing
+          - Review pending
+          - Draft
+          - CI failing
+          - Commented
+          - Changes requested
+          - Needs human review
+          - Mergeable
+          - Approved
+          - Merged
+          - Closed without merge
+          - Terminated
+          type: string
+        isTerminated:
+          type: boolean
+        kanbanColumn:
+          enum:
+          - building
+          - validating
+          - needs_review
+          - ready
+          - archive
+          type: string
+        latestAssistantUpdate:
+          type: string
+        latestUserPrompt:
+          type: string
+        needsPerson:
+          description: True when AO is waiting on a human decision, approval, or input.
+          type: boolean
+        prs:
+          items:
+            $ref: '#/components/schemas/ExternalSessionPRView'
+          type: array
+        revision:
+          format: int64
+          type: integer
+        status:
+          enum:
+          - working
+          - pr_open
+          - draft
+          - ci_failed
+          - review_pending
+          - changes_requested
+          - approved
+          - mergeable
+          - merged
+          - needs_input
+          - exited
+          - idle
+          - terminated
+          - no_signal
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        waitingReason:
+          enum:
+          - question
+          - approval
+          - input
+          type: string
+      required:
+      - status
+      - displayStatus
+      - kanbanColumn
+      - activity
+      - activityAt
+      - isTerminated
+      - needsPerson
+      - updatedAt
+      - revision
+      type: object
+    ExternalSessionPRView:
+      properties:
+        ci:
+          type: string
+        mergeability:
+          type: string
+        number:
+          type: integer
+        review:
+          type: string
+        state:
+          enum:
+          - draft
+          - open
+          - merged
+          - closed
+          type: string
+        url:
+          type: string
+      required:
+      - url
+      - number
+      - state
+      type: object
+    ExternalSessionView:
+      properties:
+        assignmentRef:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        execution:
+          $ref: '#/components/schemas/ExternalSessionExecutionView'
+        externalRef:
+          type: string
+        projectId:
+          type: string
+        sessionId:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - externalRef
+      - projectId
+      - sessionId
+      - createdAt
+      - updatedAt
+      - execution
+      type: object
     FirstTokenCoverageResponse:
       properties:
         covered:
@@ -9666,6 +10083,13 @@ components:
       required:
       - covered
       - total
+      type: object
+    GetExternalSessionResponse:
+      properties:
+        session:
+          $ref: '#/components/schemas/ExternalSessionView'
+      required:
+      - session
       type: object
     GitHubRepositoryPreparation:
       properties:
@@ -10039,6 +10463,15 @@ components:
         sessions:
           items:
             $ref: '#/components/schemas/CompactSessionUsageResponse'
+          type: array
+      required:
+      - sessions
+      type: object
+    ListExternalSessionsResponse:
+      properties:
+        sessions:
+          items:
+            $ref: '#/components/schemas/ExternalSessionView'
           type: array
       required:
       - sessions
@@ -12146,6 +12579,22 @@ components:
       required:
       - providerTurnId
       type: object
+    StopExternalSessionRequest:
+      properties:
+        reason:
+          maxLength: 512
+          type: string
+      type: object
+    StopExternalSessionResponse:
+      properties:
+        session:
+          $ref: '#/components/schemas/ExternalSessionView'
+        stopped:
+          type: boolean
+      required:
+      - stopped
+      - session
+      type: object
     SubmitAgentHandoffRequest:
       properties:
         handoff:
@@ -12872,6 +13321,9 @@ tags:
   name: projects
 - description: Agent session lifecycle and messaging
   name: sessions
+- description: 'External-orchestrator execution bridge: idempotent session mapping
+    and derived state'
+  name: execution
 - description: Pull-request actions (SCM lane)
   name: prs
 - description: Code-review runs and findings

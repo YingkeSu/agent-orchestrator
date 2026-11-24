@@ -2648,3 +2648,112 @@ type MuteDeviceRequest struct {
 type InstallIDParam struct {
 	InstallID string `path:"installId" description:"The device's stable install id."`
 }
+
+/* ---- external execution ------------------------------------------------- */
+
+// ExternalRefParam is the {externalRef} path parameter for an external
+// orchestrator's stable work-item id. It is URL-safe and namespaced by the
+// orchestrator (for example "superagent:tk_123").
+type ExternalRefParam struct {
+	ExternalRef string `path:"externalRef" description:"External orchestrator work-item id, e.g. superagent:tk_123."`
+}
+
+// EnsureExternalSessionRequest is the body of PUT
+// /api/v1/execution/sessions/{externalRef}. It is idempotent per externalRef;
+// requestFingerprint covers the immutable launch parameters.
+type EnsureExternalSessionRequest struct {
+	ProjectID          domain.ProjectID    `json:"projectId"`
+	AssignmentRef      string              `json:"assignmentRef,omitempty" maxLength:"256" description:"Current execution generation within the external work item."`
+	RequestFingerprint string              `json:"requestFingerprint" maxLength:"256" description:"Stable hash of the immutable launch parameters. A changed fingerprint for the same externalRef is a conflict."`
+	IssueID            domain.IssueID      `json:"issueId,omitempty"`
+	Harness            domain.AgentHarness `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,prime-agent,autohand"`
+	Branch             string              `json:"branch,omitempty" maxLength:"256"`
+	Prompt             string              `json:"prompt,omitempty" maxLength:"16384"`
+	Model              string              `json:"model,omitempty" maxLength:"256"`
+	Mode               domain.SessionMode  `json:"mode,omitempty" enum:"chat,tui"`
+	DisplayName        string              `json:"displayName,omitempty" maxLength:"20"`
+}
+
+// ExternalSessionPRView is the compact PR fact an external orchestrator needs
+// to decide whether the work is ready, blocked on CI, or awaiting review.
+type ExternalSessionPRView struct {
+	URL          string                `json:"url"`
+	Number       int                   `json:"number"`
+	State        string                `json:"state" enum:"draft,open,merged,closed"`
+	CI           domain.CIState        `json:"ci,omitempty"`
+	Review       domain.ReviewDecision `json:"review,omitempty"`
+	Mergeability domain.Mergeability   `json:"mergeability,omitempty"`
+}
+
+// ExternalSessionExecutionView projects AO's derived session state. Nothing
+// here is stored separately: status, kanban column, and PR facts are derived at
+// read time, exactly as the panel derives them.
+type ExternalSessionExecutionView struct {
+	Status                domain.SessionStatus `json:"status" enum:"working,pr_open,draft,ci_failed,review_pending,changes_requested,approved,mergeable,merged,needs_input,exited,idle,terminated,no_signal"`
+	DisplayStatus         domain.DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	KanbanColumn          domain.KanbanColumn  `json:"kanbanColumn" enum:"building,validating,needs_review,ready,archive"`
+	Activity              domain.ActivityState `json:"activity" enum:"active,idle,waiting_input,blocked,exited"`
+	ActivityAt            time.Time            `json:"activityAt"`
+	IsTerminated          bool                 `json:"isTerminated"`
+	NeedsPerson           bool                 `json:"needsPerson" description:"True when AO is waiting on a human decision, approval, or input."`
+	WaitingReason         string               `json:"waitingReason,omitempty" enum:"question,approval,input"`
+	LatestAssistantUpdate string               `json:"latestAssistantUpdate,omitempty"`
+	LatestUserPrompt      string               `json:"latestUserPrompt,omitempty"`
+	Branch                string               `json:"branch,omitempty"`
+	PRs                   []ExternalSessionPRView `json:"prs,omitempty"`
+	UpdatedAt             time.Time            `json:"updatedAt"`
+	// Revision is an opaque monotonic token for polling. It changes when the
+	// durable session or PR facts change; a client compares it with a state
+	// fingerprint to dedupe reports.
+	Revision int64 `json:"revision"`
+}
+
+// ExternalSessionView is one external work item's durable mapping plus AO's
+// current execution projection.
+type ExternalSessionView struct {
+	ExternalRef   string                       `json:"externalRef"`
+	AssignmentRef string                       `json:"assignmentRef,omitempty"`
+	ProjectID     domain.ProjectID             `json:"projectId"`
+	SessionID     domain.SessionID             `json:"sessionId"`
+	CreatedAt     time.Time                    `json:"createdAt"`
+	UpdatedAt     time.Time                    `json:"updatedAt"`
+	Execution     ExternalSessionExecutionView `json:"execution"`
+}
+
+// EnsureExternalSessionResponse is the body of PUT
+// /api/v1/execution/sessions/{externalRef}. created is false when an existing
+// session was reused.
+type EnsureExternalSessionResponse struct {
+	Created bool                `json:"created"`
+	Session ExternalSessionView `json:"session"`
+}
+
+// GetExternalSessionResponse is the body of GET
+// /api/v1/execution/sessions/{externalRef}.
+type GetExternalSessionResponse struct {
+	Session ExternalSessionView `json:"session"`
+}
+
+// StopExternalSessionRequest is the body of POST
+// /api/v1/execution/sessions/{externalRef}/stop.
+type StopExternalSessionRequest struct {
+	Reason string `json:"reason,omitempty" maxLength:"512"`
+}
+
+// StopExternalSessionResponse reports whether this call performed a teardown.
+// stopped=false means the session was already terminated.
+type StopExternalSessionResponse struct {
+	Stopped bool                `json:"stopped"`
+	Session ExternalSessionView `json:"session"`
+}
+
+// ListExternalSessionsQuery filters the external-session list.
+type ListExternalSessionsQuery struct {
+	ProjectID domain.ProjectID `query:"projectId" required:"true" description:"Project whose external sessions to list."`
+}
+
+// ListExternalSessionsResponse is the body of GET
+// /api/v1/execution/sessions?projectId=…
+type ListExternalSessionsResponse struct {
+	Sessions []ExternalSessionView `json:"sessions"`
+}

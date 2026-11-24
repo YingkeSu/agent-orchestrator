@@ -185,3 +185,25 @@ func hasLine(content, line string) bool {
 	}
 	return false
 }
+
+func TestRegistryIncludesDSH(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("dsh")
+	if !ok {
+		t.Fatal("registry does not contain dsh")
+	}
+	manifest := adapter.Manifest()
+	if manifest.Name != "DeepSeek Harness" {
+		t.Fatalf("dsh manifest name = %q, want DeepSeek Harness", manifest.Name)
+	}
+
+	for _, item := range Harnessed() {
+		if item.Harness == domain.HarnessDSH {
+			return
+		}
+	}
+	t.Fatal("Harnessed does not contain dsh")
+}
