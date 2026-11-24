@@ -109,7 +109,7 @@ func (q *Queries) ListExternalSessionsByProject(ctx context.Context, projectID d
 	return items, nil
 }
 
-const updateExternalSessionAssignment = `-- name: UpdateExternalSessionAssignment :exec
+const updateExternalSessionAssignment = `-- name: UpdateExternalSessionAssignment :execrows
 UPDATE external_sessions
 SET assignment_ref = ?, updated_at = ?
 WHERE external_ref = ?
@@ -121,7 +121,10 @@ type UpdateExternalSessionAssignmentParams struct {
 	ExternalRef   string
 }
 
-func (q *Queries) UpdateExternalSessionAssignment(ctx context.Context, arg UpdateExternalSessionAssignmentParams) error {
-	_, err := q.db.ExecContext(ctx, updateExternalSessionAssignment, arg.AssignmentRef, arg.UpdatedAt, arg.ExternalRef)
-	return err
+func (q *Queries) UpdateExternalSessionAssignment(ctx context.Context, arg UpdateExternalSessionAssignmentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateExternalSessionAssignment, arg.AssignmentRef, arg.UpdatedAt, arg.ExternalRef)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

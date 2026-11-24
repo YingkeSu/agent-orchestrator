@@ -20,6 +20,7 @@ type fakeStore struct {
 	createErr        error
 	hideBeforeCreate bool
 	createAttempted  bool
+	unique           bool
 	updates          []string
 }
 
@@ -44,19 +45,27 @@ func (s *fakeStore) CreateExternalSession(_ context.Context, rec domain.External
 	if s.createErr != nil {
 		return s.createErr
 	}
+	if s.unique {
+		if _, ok := s.mappings[rec.ExternalRef]; ok {
+			return errors.New("UNIQUE constraint failed: external_sessions.external_ref")
+		}
+	}
 	s.mappings[rec.ExternalRef] = rec
 	return nil
 }
 
-func (s *fakeStore) UpdateExternalSessionAssignment(_ context.Context, ref, assignment string, updatedAt time.Time) error {
+func (s *fakeStore) UpdateExternalSessionAssignment(_ context.Context, ref, assignment string, updatedAt time.Time) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec := s.mappings[ref]
+	rec, ok := s.mappings[ref]
+	if !ok {
+		return 0, nil
+	}
 	rec.AssignmentRef = assignment
 	rec.UpdatedAt = updatedAt
 	s.mappings[ref] = rec
 	s.updates = append(s.updates, ref+"="+assignment)
-	return nil
+	return 1, nil
 }
 
 func (s *fakeStore) DeleteExternalSession(_ context.Context, ref string) error {
@@ -82,8 +91,9 @@ type fakeSessions struct {
 	mu        sync.Mutex
 	spawned   []ports.SpawnConfig
 	killed    []domain.SessionID
-	rollbacks []domain.SessionID
-	sessions  map[domain.SessionID]domain.Session
+	rollbacks         []domain.SessionID
+	rollbackCanceled  bool
+	sessions          map[domain.SessionID]domain.Session
 	next      int
 	spawnErr  error
 }
@@ -129,9 +139,12 @@ func (f *fakeSessions) Kill(_ context.Context, id domain.SessionID) (bool, error
 	return true, nil
 }
 
-func (f *fakeSessions) RollbackSpawn(_ context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error) {
+func (f *fakeSessions) RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if ctx.Err() != nil {
+		f.rollbackCanceled = true
+	}
 	f.rollbacks = append(f.rollbacks, id)
 	delete(f.sessions, id)
 	return sessionsvc.RollbackOutcome{Deleted: true}, nil
@@ -311,5 +324,100 @@ func TestListProjectsExternalSessions(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Fatalf("listed %d, want 2", len(got))
+	}
+}
+
+
+func TestEnsureRejectsProjectMismatch(t *testing.T) {
+	store, sessions := newFakeStore(), newFakeSessions()
+	svc := New(store, sessions)
+	ctx := context.Background()
+	if _, err := svc.Ensure(ctx, EnsureInput{
+		ExternalRef: "ref", ProjectID: "proj", RequestFingerprint: "fp", Spawn: spawnConfig("proj"),
+	}); err != nil {
+		t.Fatalf("seed ensure: %v", err)
+	}
+	_, err := svc.Ensure(ctx, EnsureInput{
+		ExternalRef: "ref", ProjectID: "other", RequestFingerprint: "fp", Spawn: spawnConfig("other"),
+	})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Kind != apierr.KindConflict {
+		t.Fatalf("project mismatch error = %v, want conflict", err)
+	}
+}
+
+func TestEnsureConcurrentFingerprintsCreateOneSession(t *testing.T) {
+	store, sessions := newFakeStore(), newFakeSessions()
+	store.unique = true
+	svc := New(store, sessions)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var conflicts int
+	for _, fp := range []string{"fp1", "fp2"} {
+		wg.Add(1)
+		go func(fp string) {
+			defer wg.Done()
+			_, err := svc.Ensure(context.Background(), EnsureInput{
+				ExternalRef: "ref", ProjectID: "proj", RequestFingerprint: fp, Spawn: spawnConfig("proj"),
+			})
+			var apiErr *apierr.Error
+			if errors.As(err, &apiErr) && apiErr.Kind == apierr.KindConflict {
+				mu.Lock()
+				conflicts++
+				mu.Unlock()
+			}
+		}(fp)
+	}
+	wg.Wait()
+	if len(store.mappings) != 1 {
+		t.Fatalf("mappings=%d, want exactly one", len(store.mappings))
+	}
+	if conflicts != 1 {
+		t.Fatalf("conflicts=%d, want exactly one", conflicts)
+	}
+	// The racing caller either lost at CreateExternalSession (rollback) or saw
+	// the winner before spawning; both are correct as long as no orphan remains.
+	if len(sessions.spawned)-len(sessions.rollbacks) != 1 {
+		t.Fatalf("spawned=%d rollbacks=%d, want exactly one surviving session", len(sessions.spawned), len(sessions.rollbacks))
+	}
+}
+
+func TestStopConcurrentRunsOneTeardown(t *testing.T) {
+	store, sessions := newFakeStore(), newFakeSessions()
+	svc := New(store, sessions)
+	ctx := context.Background()
+	if _, err := svc.Ensure(ctx, EnsureInput{
+		ExternalRef: "ref", ProjectID: "proj", RequestFingerprint: "fp", Spawn: spawnConfig("proj"),
+	}); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, _, err := svc.Stop(ctx, "ref", "superseded"); err != nil {
+				t.Errorf("stop: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if len(sessions.killed) != 1 {
+		t.Fatalf("killed=%d, want one teardown", len(sessions.killed))
+	}
+}
+
+func TestRecoverMappingRollsBackWithLiveContext(t *testing.T) {
+	store, sessions := newFakeStore(), newFakeSessions()
+	store.createErr = errors.New("UNIQUE constraint failed")
+	store.hideBeforeCreate = true
+	svc := New(store, sessions)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = svc.Ensure(ctx, EnsureInput{
+		ExternalRef: "ref", ProjectID: "proj", RequestFingerprint: "fp", Spawn: spawnConfig("proj"),
+	})
+	if sessions.rollbackCanceled {
+		t.Fatalf("rollback ran with a cancelled context; the spawned session would be orphaned")
 	}
 }

@@ -8,6 +8,7 @@ package execution
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -23,7 +24,7 @@ import (
 type Store interface {
 	GetExternalSession(ctx context.Context, externalRef string) (domain.ExternalSession, bool, error)
 	CreateExternalSession(ctx context.Context, rec domain.ExternalSession) error
-	UpdateExternalSessionAssignment(ctx context.Context, externalRef, assignmentRef string, updatedAt time.Time) error
+	UpdateExternalSessionAssignment(ctx context.Context, externalRef, assignmentRef string, updatedAt time.Time) (int64, error)
 	DeleteExternalSession(ctx context.Context, externalRef string) error
 	ListExternalSessionsByProject(ctx context.Context, project domain.ProjectID) ([]domain.ExternalSession, error)
 }
@@ -43,6 +44,7 @@ type Service struct {
 	sessions Sessions
 	now      func() time.Time
 	ensures  singleflight.Group
+	stops    singleflight.Group
 }
 
 // New builds the service. store and sessions are required.
@@ -99,8 +101,16 @@ func (s *Service) Ensure(ctx context.Context, in EnsureInput) (Outcome, error) {
 	}
 	in.Spawn.ProjectID = in.ProjectID
 
-	result, err, _ := s.ensures.Do(in.ExternalRef, func() (any, error) {
-		return s.ensure(ctx, in)
+	// Shared work outlives the first caller's request: a retry or another
+	// request that joins the same key must not inherit its cancellation. The
+	// timeout bounds a wedged spawn; the fingerprint is part of the key so two
+	// different launch requests for one ref cannot share an Outcome and skip
+	// the conflict check in reuse().
+	work, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+	defer cancel()
+	key := in.ExternalRef + "\x00" + in.RequestFingerprint
+	result, err, _ := s.ensures.Do(key, func() (any, error) {
+		return s.ensure(work, in)
 	})
 	if err != nil {
 		return Outcome{}, err
@@ -140,22 +150,29 @@ func (s *Service) ensure(ctx context.Context, in EnsureInput) (Outcome, error) {
 // reuse returns an existing mapping, advancing its assignment generation. A
 // changed launch fingerprint is a conflict rather than a silent reuse.
 func (s *Service) reuse(ctx context.Context, existing domain.ExternalSession, in EnsureInput) (Outcome, error) {
-	if existing.RequestFingerprint != in.RequestFingerprint {
+	if existing.RequestFingerprint != in.RequestFingerprint || existing.ProjectID != in.ProjectID {
 		return Outcome{}, apierr.Conflict("EXTERNAL_REF_CONFLICT",
 			"externalRef is already bound to a different launch request",
 			map[string]any{"sessionId": string(existing.SessionID), "projectId": string(existing.ProjectID)})
 	}
-	if existing.AssignmentRef != in.AssignmentRef {
-		now := s.now()
-		if err := s.store.UpdateExternalSessionAssignment(ctx, existing.ExternalRef, in.AssignmentRef, now); err != nil {
-			return Outcome{}, err
-		}
-		existing.AssignmentRef = in.AssignmentRef
-		existing.UpdatedAt = now
-	}
+	// Read the session before advancing the mapping: a mapping advance that the
+	// caller then cannot observe would leave the stored generation ahead of what
+	// the orchestrator was told.
 	sess, err := s.sessions.Get(ctx, existing.SessionID)
 	if err != nil {
 		return Outcome{}, err
+	}
+	if existing.AssignmentRef != in.AssignmentRef {
+		now := s.now()
+		rows, err := s.store.UpdateExternalSessionAssignment(ctx, existing.ExternalRef, in.AssignmentRef, now)
+		if err != nil {
+			return Outcome{}, err
+		}
+		if rows == 0 {
+			return Outcome{}, apierr.NotFound("EXTERNAL_SESSION_NOT_FOUND", "External session mapping disappeared")
+		}
+		existing.AssignmentRef = in.AssignmentRef
+		existing.UpdatedAt = now
 	}
 	return Outcome{External: existing, Session: sess, Created: false}, nil
 }
@@ -164,7 +181,11 @@ func (s *Service) reuse(ctx context.Context, existing domain.ExternalSession, in
 // concurrent writer won the unique mapping, then returns the winner. The loser
 // of the race must never leave an orphan session behind.
 func (s *Service) recoverMappingConflict(ctx context.Context, spawned domain.SessionID, in EnsureInput, cause error) (Outcome, error) {
-	if _, rollbackErr := s.sessions.RollbackSpawn(ctx, spawned); rollbackErr != nil {
+	// The create may have failed because the request was cancelled; the rollback
+	// must still run or the spawned session becomes an orphan.
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if _, rollbackErr := s.sessions.RollbackSpawn(rollbackCtx, spawned); rollbackErr != nil {
 		return Outcome{}, fmt.Errorf("record external session mapping: %w; rollback %s: %v", cause, spawned, rollbackErr)
 	}
 	winner, ok, readErr := s.store.GetExternalSession(ctx, in.ExternalRef)
@@ -214,20 +235,32 @@ func (s *Service) List(ctx context.Context, project domain.ProjectID) ([]View, e
 // terminated session is returned without a second teardown, and the mapping is
 // kept so a replaced orchestrator can still read the final state.
 func (s *Service) Stop(ctx context.Context, externalRef, reason string) (View, bool, error) {
-	view, err := s.Get(ctx, externalRef)
+	ref := strings.TrimSpace(externalRef)
+	slog.Info("external execution stop", "externalRef", ref, "reason", strings.TrimSpace(reason))
+	type stopOutcome struct {
+		view    View
+		stopped bool
+	}
+	result, err, _ := s.stops.Do(ref, func() (any, error) {
+		view, err := s.Get(ctx, ref)
+		if err != nil {
+			return nil, err
+		}
+		if view.Session.IsTerminated {
+			return stopOutcome{view: view}, nil
+		}
+		if _, err := s.sessions.Kill(ctx, view.External.SessionID); err != nil {
+			return nil, err
+		}
+		sess, err := s.sessions.Get(ctx, view.External.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		return stopOutcome{view: View{External: view.External, Session: sess}, stopped: true}, nil
+	})
 	if err != nil {
 		return View{}, false, err
 	}
-	if view.Session.IsTerminated {
-		return view, false, nil
-	}
-	_ = strings.TrimSpace(reason)
-	if _, err := s.sessions.Kill(ctx, view.External.SessionID); err != nil {
-		return View{}, false, err
-	}
-	sess, err := s.sessions.Get(ctx, view.External.SessionID)
-	if err != nil {
-		return View{}, false, err
-	}
-	return View{External: view.External, Session: sess}, true, nil
+	out := result.(stopOutcome)
+	return out.view, out.stopped, nil
 }

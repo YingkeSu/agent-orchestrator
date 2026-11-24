@@ -8,7 +8,7 @@ INSERT INTO external_sessions (
     external_ref, project_id, session_id, assignment_ref, request_fingerprint, created_at, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?);
 
--- name: UpdateExternalSessionAssignment :exec
+-- name: UpdateExternalSessionAssignment :execrows
 UPDATE external_sessions
 SET assignment_ref = ?, updated_at = ?
 WHERE external_ref = ?;

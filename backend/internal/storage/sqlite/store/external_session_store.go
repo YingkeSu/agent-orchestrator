@@ -46,17 +46,18 @@ func (s *Store) CreateExternalSession(ctx context.Context, rec domain.ExternalSe
 
 // UpdateExternalSessionAssignment advances the current assignment generation
 // without changing the session or its immutable launch fingerprint.
-func (s *Store) UpdateExternalSessionAssignment(ctx context.Context, externalRef, assignmentRef string, updatedAt time.Time) error {
+func (s *Store) UpdateExternalSessionAssignment(ctx context.Context, externalRef, assignmentRef string, updatedAt time.Time) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.UpdateExternalSessionAssignment(ctx, gen.UpdateExternalSessionAssignmentParams{
+	rows, err := s.qw.UpdateExternalSessionAssignment(ctx, gen.UpdateExternalSessionAssignmentParams{
 		AssignmentRef: assignmentRef,
 		UpdatedAt:     updatedAt,
 		ExternalRef:   externalRef,
-	}); err != nil {
-		return fmt.Errorf("update external session %q: %w", externalRef, err)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("update external session %q: %w", externalRef, err)
 	}
-	return nil
+	return rows, nil
 }
 
 // DeleteExternalSession removes a mapping. It never touches the AO session.
