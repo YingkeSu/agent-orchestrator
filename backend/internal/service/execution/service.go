@@ -34,6 +34,7 @@ type Store interface {
 type Sessions interface {
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error)
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
+	List(ctx context.Context, filter sessionsvc.ListFilter) ([]domain.Session, error)
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
 }
@@ -115,7 +116,17 @@ func (s *Service) Ensure(ctx context.Context, in EnsureInput) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
-	return result.(Outcome), nil
+	out := result.(Outcome)
+	// Waiters share the first caller's Outcome, which may carry another
+	// assignment generation. Re-align to this caller's input so the returned
+	// generation matches what the orchestrator asked for, and re-check the
+	// fingerprint/project after the shared work.
+	refreshed, err := s.reuse(ctx, out.External, in)
+	if err != nil {
+		return Outcome{}, err
+	}
+	refreshed.Created = out.Created
+	return refreshed, nil
 }
 
 func (s *Service) ensure(ctx context.Context, in EnsureInput) (Outcome, error) {
@@ -188,11 +199,11 @@ func (s *Service) recoverMappingConflict(ctx context.Context, spawned domain.Ses
 	if _, rollbackErr := s.sessions.RollbackSpawn(rollbackCtx, spawned); rollbackErr != nil {
 		return Outcome{}, fmt.Errorf("record external session mapping: %w; rollback %s: %v", cause, spawned, rollbackErr)
 	}
-	winner, ok, readErr := s.store.GetExternalSession(ctx, in.ExternalRef)
+	winner, ok, readErr := s.store.GetExternalSession(rollbackCtx, in.ExternalRef)
 	if readErr != nil || !ok {
 		return Outcome{}, fmt.Errorf("record external session mapping: %w", cause)
 	}
-	return s.reuse(ctx, winner, in)
+	return s.reuse(rollbackCtx, winner, in)
 }
 
 // Get projects the mapping and AO's derived session state.
@@ -220,11 +231,22 @@ func (s *Service) List(ctx context.Context, project domain.ProjectID) ([]View, e
 	if err != nil {
 		return nil, err
 	}
+	all, err := s.sessions.List(ctx, sessionsvc.ListFilter{ProjectID: project})
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[domain.SessionID]domain.Session, len(all))
+	for _, sess := range all {
+		byID[sess.ID] = sess
+	}
 	out := make([]View, 0, len(recs))
 	for _, rec := range recs {
-		sess, err := s.sessions.Get(ctx, rec.SessionID)
-		if err != nil {
-			return nil, err
+		sess, ok := byID[rec.SessionID]
+		if !ok {
+			// A mapping whose session disappeared is a stale external record; it
+			// must not fail the whole reconcile list. Reporting it is the caller's
+			// job through a per-ref GET (which answers 404).
+			continue
 		}
 		out = append(out, View{External: rec, Session: sess})
 	}
@@ -241,18 +263,24 @@ func (s *Service) Stop(ctx context.Context, externalRef, reason string) (View, b
 		view    View
 		stopped bool
 	}
+	work, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
 	result, err, _ := s.stops.Do(ref, func() (any, error) {
-		view, err := s.Get(ctx, ref)
+		view, err := s.Get(work, ref)
 		if err != nil {
 			return nil, err
 		}
 		if view.Session.IsTerminated {
 			return stopOutcome{view: view}, nil
 		}
-		if _, err := s.sessions.Kill(ctx, view.External.SessionID); err != nil {
+		// Kill's bool reports whether a workspace was reclaimed, not whether this
+		// call performed the teardown. stopped therefore means "the session was
+		// live when this call began"; a concurrent path that ended it first is
+		// harmless because Kill is idempotent.
+		if _, err := s.sessions.Kill(work, view.External.SessionID); err != nil {
 			return nil, err
 		}
-		sess, err := s.sessions.Get(ctx, view.External.SessionID)
+		sess, err := s.sessions.Get(work, view.External.SessionID)
 		if err != nil {
 			return nil, err
 		}

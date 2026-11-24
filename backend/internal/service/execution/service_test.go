@@ -129,6 +129,18 @@ func (f *fakeSessions) Get(_ context.Context, id domain.SessionID) (domain.Sessi
 	return sess, nil
 }
 
+func (f *fakeSessions) List(_ context.Context, filter sessionsvc.ListFilter) ([]domain.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]domain.Session, 0, len(f.sessions))
+	for _, sess := range f.sessions {
+		if filter.ProjectID == "" || sess.ProjectID == filter.ProjectID {
+			out = append(out, sess)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeSessions) Kill(_ context.Context, id domain.SessionID) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -419,5 +431,41 @@ func TestRecoverMappingRollsBackWithLiveContext(t *testing.T) {
 	})
 	if sessions.rollbackCanceled {
 		t.Fatalf("rollback ran with a cancelled context; the spawned session would be orphaned")
+	}
+}
+
+
+func TestEnsureConcurrentAssignmentsAlignToCaller(t *testing.T) {
+	store, sessions := newFakeStore(), newFakeSessions()
+	svc := New(store, sessions)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	results := make(chan string, 2)
+	for _, assignment := range []string{"asg_1", "asg_2"} {
+		wg.Add(1)
+		go func(assignment string) {
+			defer wg.Done()
+			out, err := svc.Ensure(ctx, EnsureInput{
+				ExternalRef: "ref", ProjectID: "proj", AssignmentRef: assignment,
+				RequestFingerprint: "fp", Spawn: spawnConfig("proj"),
+			})
+			if err != nil {
+				t.Errorf("ensure %s: %v", assignment, err)
+				return
+			}
+			results <- string(out.External.AssignmentRef)
+		}(assignment)
+	}
+	wg.Wait()
+	close(results)
+	seen := map[string]bool{}
+	for assignment := range results {
+		seen[assignment] = true
+	}
+	if !seen["asg_1"] || !seen["asg_2"] {
+		t.Fatalf("returned assignments = %v, want each caller's own generation", seen)
+	}
+	if len(store.mappings) != 1 || len(sessions.spawned) != 1 {
+		t.Fatalf("mappings=%d spawned=%d, want one session", len(store.mappings), len(sessions.spawned))
 	}
 }
