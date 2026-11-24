@@ -64,6 +64,8 @@ func Build() ([]byte, error) {
 			"Project registry, configuration, and lifecycle administration"),
 		*(&openapi31.Tag{Name: "sessions"}).WithDescription(
 			"Agent session lifecycle and messaging"),
+		*(&openapi31.Tag{Name: "execution"}).WithDescription(
+			"External-orchestrator execution bridge: idempotent session mapping and derived state"),
 		*(&openapi31.Tag{Name: "prs"}).WithDescription(
 			"Pull-request actions (SCM lane)"),
 		*(&openapi31.Tag{Name: "reviews"}).WithDescription(
@@ -143,6 +145,17 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"ControllersExternalRefParam":                          "ExternalRefParam",
+	"ControllersEnsureExternalSessionRequest":              "EnsureExternalSessionRequest",
+	"ControllersEnsureExternalSessionResponse":             "EnsureExternalSessionResponse",
+	"ControllersGetExternalSessionResponse":                "GetExternalSessionResponse",
+	"ControllersStopExternalSessionRequest":                "StopExternalSessionRequest",
+	"ControllersStopExternalSessionResponse":               "StopExternalSessionResponse",
+	"ControllersListExternalSessionsQuery":                 "ListExternalSessionsQuery",
+	"ControllersListExternalSessionsResponse":              "ListExternalSessionsResponse",
+	"ControllersExternalSessionView":                       "ExternalSessionView",
+	"ControllersExternalSessionExecutionView":              "ExternalSessionExecutionView",
+	"ControllersExternalSessionPRView":                     "ExternalSessionPRView",
 	"ControllersSettingsResponse":                          "SettingsResponse",
 	"ControllersDesktopWorkspaceLocationResponse":          "DesktopWorkspaceLocationResponse",
 	"ControllersUpdateSessionInterfaceRequest":             "UpdateSessionInterfaceRequest",
@@ -1776,6 +1789,56 @@ func eventOperations() []operation {
 // TestRouteSpecParity fails the build otherwise.
 func projectOperations() []operation {
 	return []operation{
+		{
+			method: http.MethodPut, path: "/api/v1/execution/sessions/{externalRef}", id: "ensureExternalSession", tag: "execution",
+			summary:    "Ensure one AO session for an external work item (idempotent)",
+			pathParams: []any{controllers.ExternalRefParam{}},
+			reqBody:    controllers.EnsureExternalSessionRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.EnsureExternalSessionResponse{}},
+				{http.StatusCreated, controllers.EnsureExternalSessionResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/execution/sessions/{externalRef}", id: "getExternalSession", tag: "execution",
+			summary:    "Read an external work item's AO session and derived execution state",
+			pathParams: []any{controllers.ExternalRefParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.GetExternalSessionResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/execution/sessions/{externalRef}/stop", id: "stopExternalSession", tag: "execution",
+			summary:    "Stop an external work item's AO session (idempotent)",
+			pathParams: []any{controllers.ExternalRefParam{}},
+			reqBody:    controllers.StopExternalSessionRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.StopExternalSessionResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/execution/sessions", id: "listExternalSessions", tag: "execution",
+			summary:    "List a project's external work items and their execution state",
+			pathParams: []any{controllers.ListExternalSessionsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListExternalSessionsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
 		{
 			method: http.MethodGet, path: "/api/v1/projects", id: "listProjects", tag: "projects",
 			summary: "List all registered projects (active + degraded)",
